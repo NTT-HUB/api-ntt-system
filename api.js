@@ -493,8 +493,8 @@ async function handleRequest(request, env, ctx) {
       return json({ success: false, error: "Invalid website domain" }, 400, request);
 
     const finalKeyDomain = (key_domain || "KEY").toUpperCase();
-    if (finalKeyDomain.length > 6)
-      return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
+    if (finalKeyDomain.length > 10)
+      return json({ success: false, error: "Key domain max 10 chars" }, 400, request);
 
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
