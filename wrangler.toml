@@ -1,0 +1,15 @@
+name = "api-ntt-system"
+main = "api.js"
+compatibility_date = "2025-04-19"
+
+[[kv_namespaces]]
+binding = "ntt-system"
+id = "6f083f8186ae4b31bbdfaec24c691f02"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ntt-system"
+database_id = "93240972-9a9a-4e6d-b45a-d7ff1cd094bf"
+
+[vars]
+LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0"
