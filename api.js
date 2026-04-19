@@ -4,10 +4,11 @@
 
 const ENCODE_KEY = "string.char"; // ← đổi key tại đây, phải khớp với Lua
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
+const SYSTEM_START_LINK = "https://linkvertise.com/1292597/ntt-start/1"; // ← link start của hệ thống
 
 const MIN_FLOW_SECONDS  = 25;
 const MIN_STEP2_SECONDS = 15;
-const WEBHOOK_URL = "https://discord.com/api/webhooks/1492190232110698617/R99ssaRboxvn2gt4vgZcB2p3tgafRNiXdX3yUcdi6jBjQxjXUEyBwtBLX3IXL6lc-5nd";
+// WEBHOOK_URL đã bị xóa — chỉ dùng webhook của từng user
 const SESSION_TTL = 2 * 60 * 60;
 const IP_WINDOW   = 24 * 60 * 60;
 const IP_MAX_HWID = 20;
@@ -68,11 +69,11 @@ async function checkLinkvertiseHash(hash, token, userAgent) {
   } catch { return false; }
 }
 
-// ── encode helpers (port từ Lua, đồng nhất với client) ───────
+// ── encode helpers ────────────────────────────────────────────
 function simpleHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
-    hash = (hash * 131 + str.charCodeAt(i)) % 4294967296; // 2^32
+    hash = (hash * 131 + str.charCodeAt(i)) % 4294967296;
   }
   return hash;
 }
@@ -91,7 +92,7 @@ function encodeData(plaintext, baseKey) {
   const result = [];
   for (let i = 0; i < plaintext.length; i++) {
     const byte = plaintext.charCodeAt(i);
-    const k    = (hashedKey + (i + 1) * 7) % 256; // Lua i bắt đầu từ 1
+    const k    = (hashedKey + (i + 1) * 7) % 256;
     let encoded = (byte ^ k);
     encoded = (encoded + k) % 256;
     result.push(String.fromCharCode(encoded));
@@ -102,22 +103,22 @@ function encodeData(plaintext, baseKey) {
   return timeEncoded + "|" + t + "|" + encodedStr;
 }
 
-// ── Discord webhook ──────────────────────────────────────────
+// ── Discord webhook — chỉ dùng webhook của user ──────────────
 async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
   if (!webhookUrl) return;
-  
+
   const embed = {
     title: "New Key Generated",
     color: 0x00ff9d,
     fields: [
-      { name: "HWID", value: `\`${hwid}\``, inline: false },
-      { name: "Key", value: `\`${key}\``, inline: false },
+      { name: "HWID",  value: `\`${hwid}\``, inline: false },
+      { name: "Key",   value: `\`${key}\``,  inline: false },
       { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true },
     ],
     footer: { text: "NTT System" },
     timestamp: new Date().toISOString(),
   };
-  
+
   try {
     await fetch(webhookUrl, {
       method: "POST",
@@ -127,7 +128,7 @@ async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
   } catch {}
 }
 
-// ── Auth helpers ─────────────────────────────────────────────
+// ── Auth helpers ──────────────────────────────────────────────
 const JWT_SECRET = "ntt-hub-jwt-secret-change-this";
 const SESSION_DURATION = 7 * 24 * 60 * 60; // 7 days
 
@@ -140,7 +141,7 @@ async function hashPassword(password) {
 }
 
 async function generateToken(userId, username) {
-  const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const header  = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload = btoa(JSON.stringify({
     userId,
     username,
@@ -164,7 +165,7 @@ async function verifyToken(token) {
   }
 }
 
-// ── main handler ─────────────────────────────────────────────
+// ── main handler ──────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
     try { return await handleRequest(request, env, ctx); }
@@ -319,15 +320,6 @@ async function handleRequest(request, env, ctx) {
     }
 
     await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-
-    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
-    let hwidsToday = 1;
-    try {
-      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?").bind(clientIp).first();
-      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
-    } catch {}
-
-    ctx.waitUntil(sendWebhook(env.WEBHOOK_URL || WEBHOOK_URL, { hwid, key, ip: clientIp, hwidsToday }));
     return json({ status: true, key, expires_in: 86400 }, request);
   }
 
@@ -345,9 +337,7 @@ async function handleRequest(request, env, ctx) {
   }
 
   // ══════════════════════════════════════════════════════════
-  // DATA — Roblox check key (trả về chuỗi encoded)
-  // GET /?type=data&hwid=xxx
-  // PUBLIC ENDPOINT - Anyone can call this
+  // DATA — Roblox check key
   // ══════════════════════════════════════════════════════════
   if (type === "data") {
     const hwid = normalizeHwid(url);
@@ -364,7 +354,7 @@ async function handleRequest(request, env, ctx) {
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
 
     let baseKey = env.ENCODE_KEY || ENCODE_KEY;
-    
+
     if (domain) {
       const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
         .bind(domain).first();
@@ -381,7 +371,6 @@ async function handleRequest(request, env, ctx) {
 
   // ══════════════════════════════════════════════════════════
   // READ — Đọc key theo hwid
-  // GET /api?type=read&hwid=xxx
   // ══════════════════════════════════════════════════════════
   if (type === "read") {
     const hwid = normalizeHwid(url);
@@ -399,29 +388,38 @@ async function handleRequest(request, env, ctx) {
   }
 
   // ══════════════════════════════════════════════════════════
+  // GET START LINK — Trả về link start của hệ thống
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_start_link") {
+    return json({
+      success: true,
+      start_link: env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+    }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
   // AUTH: REGISTER
   // ══════════════════════════════════════════════════════════
   if (type === "register") {
     let body;
-    try { body = await request.json(); } 
+    try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
     const { username, email, password } = body;
-    if (!username || !email || !password) 
+    if (!username || !email || !password)
       return json({ success: false, error: "All fields required" }, 400, request);
-    
-    // Validate username: letters, numbers, underscore, and spaces only
+
     if (!/^[a-zA-Z0-9_ ]+$/.test(username))
       return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
-    
-    if (username.length < 3 || username.length > 15) 
+
+    if (username.length < 3 || username.length > 15)
       return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
-    if (password.length < 6 || password.length > 20) 
+    if (password.length < 6 || password.length > 20)
       return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
 
     const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? OR email = ?")
       .bind(username, email).first();
-    if (existing) 
+    if (existing)
       return json({ success: false, error: "Username or email exists" }, 409, request);
 
     const hashedPassword = await hashPassword(password);
@@ -499,40 +497,48 @@ async function handleRequest(request, env, ctx) {
   }
 
   // ══════════════════════════════════════════════════════════
-  // SAVE SETTINGS
+  // SAVE SETTINGS — không có start_link nữa
   // ══════════════════════════════════════════════════════════
   if (type === "save_settings") {
     let body;
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, start_link, step1_link, step2_link } = body;
-    
+    const {
+      user_id, website_domain, key_domain, encode_key,
+      linkvertise_token, discord_webhook, ad_steps,
+      step1_link, step2_link,
+    } = body;
+
     if (!user_id || !website_domain || !linkvertise_token)
       return json({ success: false, error: "Missing required fields" }, 400, request);
 
-    const finalKeyDomain = (key_domain || 'KEY').toUpperCase();
+    const finalKeyDomain = (key_domain || "KEY").toUpperCase();
     if (finalKeyDomain.length > 6)
       return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
 
-    const now = Math.floor(Date.now() / 1000);
-    const finalEncodeKey = encode_key || 'ntt-hub';
+    const now            = Math.floor(Date.now() / 1000);
+    const finalEncodeKey = encode_key || "ntt-hub";
 
     await env.DB.prepare(`
-      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, start_link, step1_link, step2_link, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO user_settings
+        (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
-        website_domain = excluded.website_domain,
-        key_domain = excluded.key_domain,
-        encode_key = excluded.encode_key,
+        website_domain    = excluded.website_domain,
+        key_domain        = excluded.key_domain,
+        encode_key        = excluded.encode_key,
         linkvertise_token = excluded.linkvertise_token,
-        discord_webhook = excluded.discord_webhook,
-        ad_steps = excluded.ad_steps,
-        start_link = excluded.start_link,
-        step1_link = excluded.step1_link,
-        step2_link = excluded.step2_link,
-        updated_at = excluded.updated_at
-    `).bind(user_id, website_domain, finalKeyDomain, finalEncodeKey, linkvertise_token, discord_webhook || '', ad_steps, start_link || '', step1_link, step2_link, now, now).run();
+        discord_webhook   = excluded.discord_webhook,
+        ad_steps          = excluded.ad_steps,
+        step1_link        = excluded.step1_link,
+        step2_link        = excluded.step2_link,
+        updated_at        = excluded.updated_at
+    `).bind(
+      user_id, website_domain, finalKeyDomain, finalEncodeKey,
+      linkvertise_token, discord_webhook || "", ad_steps,
+      step1_link, step2_link, now, now,
+    ).run();
 
     return json({ success: true, message: "Settings saved" }, request);
   }
@@ -554,7 +560,7 @@ async function handleRequest(request, env, ctx) {
   }
 
   // ══════════════════════════════════════════════════════════
-  // GET SETTINGS BY DOMAIN
+  // GET SETTINGS BY DOMAIN — thêm start_link hệ thống vào response
   // ══════════════════════════════════════════════════════════
   if (type === "get_settings_by_domain") {
     const domain = url.searchParams.get("domain");
@@ -566,7 +572,14 @@ async function handleRequest(request, env, ctx) {
     if (!settings)
       return json({ success: false, error: "Settings not found" }, 404, request);
 
-    return json({ success: true, settings }, request);
+    // Luôn dùng start_link của hệ thống, không dùng start_link của user
+    return json({
+      success: true,
+      settings: {
+        ...settings,
+        start_link: env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+      },
+    }, request);
   }
 
   // ══════════════════════════════════════════════════════════
@@ -582,17 +595,15 @@ async function handleRequest(request, env, ctx) {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Get or create progress
     let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    
+
     if (!progress) {
       await env.DB.prepare(
         "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
       ).bind(hwid, now, now).run();
     }
 
-    // Update step
-    if (step === 'start') {
+    if (step === "start") {
       await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 1) {
       await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
@@ -612,10 +623,9 @@ async function handleRequest(request, env, ctx) {
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
     const { hwid, domain, key_prefix } = body;
-    if (!hwid || !domain || !key_prefix) 
+    if (!hwid || !domain || !key_prefix)
       return json({ success: false, error: "Missing params" }, 400, request);
 
-    // Check if all steps completed
     const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
     const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
       .bind(domain).first();
@@ -629,30 +639,27 @@ async function handleRequest(request, env, ctx) {
     if (settings.ad_steps === 2 && !progress.step2)
       return json({ success: false, error: "Step 2 not completed" }, 403, request);
 
-    // Generate key
-    const now = Math.floor(Date.now() / 1000);
+    const now   = Math.floor(Date.now() / 1000);
     const keyId = Math.random().toString().slice(2, 9);
-    const key = `${key_prefix.toUpperCase()}_${keyId}`;
+    const key   = `${key_prefix.toUpperCase()}_${keyId}`;
 
-    // Save to KV
-    if (!env["ntt-system"]) 
+    if (!env["ntt-system"])
       return json({ success: false, error: "KV not bound" }, 500, request);
 
-    await env["ntt-system"].put(`Key/${hwid}`, key, { 
-      expirationTtl: 86400, 
-      metadata: { created: now, domain } 
+    await env["ntt-system"].put(`Key/${hwid}`, key, {
+      expirationTtl: 86400,
+      metadata: { created: now, domain },
     });
 
-    // Update total keys count
     await env.DB.prepare(
       "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
     ).bind(domain).run();
 
-    // Clean up progress
     await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
 
-    const updatedSettings = await env.DB.prepare("SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?")
-      .bind(domain).first();
+    const updatedSettings = await env.DB.prepare(
+      "SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?"
+    ).bind(domain).first();
 
     let hwidsToday = 1;
     try {
@@ -661,15 +668,16 @@ async function handleRequest(request, env, ctx) {
       if (tr) hwidsToday = JSON.parse(tr.hwids).length;
     } catch {}
 
+    // Chỉ gửi webhook của user, không còn webhook hệ thống
     if (updatedSettings?.discord_webhook) {
       ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
     }
 
-    return json({ 
-      success: true, 
-      key, 
+    return json({
+      success: true,
+      key,
       expires_in: 86400,
-      total_keys: updatedSettings?.total_keys || 1
+      total_keys: updatedSettings?.total_keys || 1,
     }, request);
   }
 
@@ -740,7 +748,7 @@ async function handleRequest(request, env, ctx) {
     try {
       const result = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
       return json({ success: true, total: result?.total || 0 }, request);
-    } catch (error) {
+    } catch {
       return json({ success: true, total: 0 }, request);
     }
   }
