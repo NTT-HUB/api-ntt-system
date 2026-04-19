@@ -1,56 +1,748 @@
--- ============================================================
--- D1 SQL Schema — NTT HUB Authentication System
--- wrangler d1 execute anti-bypass --file=auth-schema.sql
--- ============================================================
+// ============================================================
+// NTT HUB - Combined Worker
+// ============================================================
 
--- Users table
-CREATE TABLE IF NOT EXISTS users (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  username   TEXT    UNIQUE NOT NULL,
-  email      TEXT    UNIQUE NOT NULL,
-  password   TEXT    NOT NULL,
-  role       TEXT    DEFAULT 'user',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER
-);
+const ENCODE_KEY = "string.char"; // ← đổi key tại đây, phải khớp với Lua
+const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
 
-CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at);
+const MIN_FLOW_SECONDS  = 25;
+const MIN_STEP2_SECONDS = 15;
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1492190232110698617/R99ssaRboxvn2gt4vgZcB2p3tgafRNiXdX3yUcdi6jBjQxjXUEyBwtBLX3IXL6lc-5nd";
+const SESSION_TTL = 2 * 60 * 60;
+const IP_WINDOW   = 24 * 60 * 60;
+const IP_MAX_HWID = 20;
 
--- User sessions (optional, for tracking active sessions)
-CREATE TABLE IF NOT EXISTS sessions (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    INTEGER NOT NULL,
-  token_hash TEXT    NOT NULL,
-  ip_address TEXT,
-  user_agent TEXT,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+// ── helpers ──────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  "https://ntt-hub.xyz",
+  "https://www.ntt-hub.xyz",
+  "https://ntt-system.pages.dev",
+  "null",
+];
 
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
-CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+function getCors(request) {
+  const origin  = request?.headers?.get("Origin") || "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : "https://ntt-hub.xyz";
+  return {
+    "Access-Control-Allow-Origin":  allowed,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, User-Agent, Authorization",
+    "Vary": "Origin",
+  };
+}
 
--- User settings table
-CREATE TABLE IF NOT EXISTS user_settings (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id         INTEGER NOT NULL UNIQUE,
-  website_domain  TEXT    NOT NULL,
-  key_domain      TEXT    DEFAULT 'KEY',
-  encode_key      TEXT    DEFAULT 'ntt-hub',
-  linkvertise_token TEXT  NOT NULL,
-  discord_webhook TEXT,
-  ad_steps        INTEGER DEFAULT 1,
-  step1_link      TEXT,
-  step2_link      TEXT,
-  total_keys      INTEGER DEFAULT 0,
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+function json(obj, status = 200, request = null) {
+  if (status && typeof status === "object" && status.headers) {
+    request = status;
+    status  = 200;
+  }
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...getCors(request), "Content-Type": "application/json" },
+  });
+}
 
-CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id);
-CREATE INDEX IF NOT EXISTS idx_settings_domain ON user_settings(website_domain);
+function text(str, status = 200, request = null) {
+  return new Response(str, {
+    status,
+    headers: { ...getCors(request), "Content-Type": "text/plain" },
+  });
+}
+
+function normalizeHwid(url) {
+  const raw = url.search.match(/[?&]hwid=([^&]*)/)?.[1];
+  if (!raw) return null;
+  try { return decodeURIComponent(raw).replace(/ /g, "+"); }
+  catch { return raw.replace(/ /g, "+"); }
+}
+
+async function checkLinkvertiseHash(hash, token, userAgent) {
+  const apiUrl = `https://publisher.linkvertise.com/api/v1/anti_bypassing?token=${token}&hash=${encodeURIComponent(hash)}`;
+  try {
+    const res  = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": userAgent || "Cloudflare-Worker" },
+    });
+    const data = await res.json();
+    return data?.status === true;
+  } catch { return false; }
+}
+
+// ── encode helpers (port từ Lua, đồng nhất với client) ───────
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 131 + str.charCodeAt(i)) % 4294967296; // 2^32
+  }
+  return hash;
+}
+
+function toHex(str) {
+  return [...str].map(c =>
+    c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()
+  ).join("");
+}
+
+function encodeData(plaintext, baseKey) {
+  const t = Math.floor(Date.now() / 1000);
+  const rawKey    = String(baseKey) + ":" + String(t);
+  const hashedKey = simpleHash(rawKey);
+
+  const result = [];
+  for (let i = 0; i < plaintext.length; i++) {
+    const byte = plaintext.charCodeAt(i);
+    const k    = (hashedKey + (i + 1) * 7) % 256; // Lua i bắt đầu từ 1
+    let encoded = (byte ^ k);
+    encoded = (encoded + k) % 256;
+    result.push(String.fromCharCode(encoded));
+  }
+
+  const encodedStr  = toHex(result.join(""));
+  const timeEncoded = Math.floor(simpleHash(String(t) + "salt")).toString();
+  return timeEncoded + "|" + t + "|" + encodedStr;
+}
+
+// ── Discord webhook ──────────────────────────────────────────
+async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
+  if (!webhookUrl) return;
+  
+  const embed = {
+    title: "New Key Generated",
+    color: 0x00ff9d,
+    fields: [
+      { name: "HWID", value: `\`${hwid}\``, inline: false },
+      { name: "Key", value: `\`${key}\``, inline: false },
+      { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true },
+    ],
+    footer: { text: "NTT System" },
+    timestamp: new Date().toISOString(),
+  };
+  
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ embeds: [embed] }),
+    });
+  } catch {}
+}
+
+// ── Auth helpers ─────────────────────────────────────────────
+const JWT_SECRET = "ntt-hub-jwt-secret-change-this";
+const SESSION_DURATION = 7 * 24 * 60 * 60; // 7 days
+
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + "ntt-salt-key");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function generateToken(userId, username) {
+  const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = btoa(JSON.stringify({
+    userId,
+    username,
+    exp: Math.floor(Date.now() / 1000) + SESSION_DURATION,
+  }));
+  const signature = await hashPassword(header + "." + payload + JWT_SECRET);
+  return `${header}.${payload}.${signature.substring(0, 43)}`;
+}
+
+async function verifyToken(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    const expectedSig = await hashPassword(parts[0] + "." + parts[1] + JWT_SECRET);
+    if (!expectedSig.startsWith(parts[2])) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// ── main handler ─────────────────────────────────────────────
+export default {
+  async fetch(request, env, ctx) {
+    try { return await handleRequest(request, env, ctx); }
+    catch (err) {
+      return new Response(JSON.stringify({ status: false, error: "internal_error", message: err?.message || "unknown" }), {
+        status:  500,
+        headers: { ...getCors(request), "Content-Type": "application/json" },
+      });
+    }
+  },
+};
+
+async function handleRequest(request, env, ctx) {
+  const url  = new URL(request.url);
+  const type = url.searchParams.get("type");
+  const ua   = request.headers.get("User-Agent") || "";
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 200, headers: getCors(request) });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // INIT
+  // ══════════════════════════════════════════════════════════
+  if (type === "init") {
+    let hwid, ostime;
+    try {
+      const body = await request.json();
+      hwid   = typeof body.hwid === "string" ? body.hwid.replace(/ /g, "+") : body.hwid;
+      ostime = body.ostime;
+    } catch { return json({ status: false, error: "invalid_body" }, 400, request); }
+
+    if (!hwid || !ostime) return json({ status: false, error: "missing_params" }, 400, request);
+
+    const now    = Math.floor(Date.now() / 1000);
+    const cutoff = now - SESSION_TTL;
+    const ip     = request.headers.get("CF-Connecting-IP") || "unknown";
+
+    const blRow = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip = ?").bind(ip).first();
+    if (blRow) return json({ status: false, error: "ip_blacklisted" }, 403, request);
+
+    let trackRow = await env.DB.prepare("SELECT hwids, first_seen FROM ip_tracking WHERE ip = ?").bind(ip).first();
+    let hwids      = [];
+    let first_seen = now;
+
+    if (trackRow) {
+      if (now - trackRow.first_seen > IP_WINDOW) {
+        await env.DB.prepare("DELETE FROM ip_tracking WHERE ip = ?").bind(ip).run();
+      } else {
+        try { hwids = JSON.parse(trackRow.hwids); } catch {}
+        first_seen = trackRow.first_seen;
+      }
+    }
+
+    if (!hwids.includes(hwid)) hwids.push(hwid);
+
+    if (hwids.length >= IP_MAX_HWID) {
+      await env.DB.prepare(
+        "INSERT INTO ip_blacklist (ip, banned_at, reason) VALUES (?, ?, ?) ON CONFLICT(ip) DO NOTHING"
+      ).bind(ip, now, "exceeded_hwid_limit").run();
+      return json({ status: false, error: "ip_blacklisted", reason: "exceeded_hwid_limit" }, 403, request);
+    }
+
+    await env.DB.prepare(
+      `INSERT INTO ip_tracking (ip, hwids, first_seen) VALUES (?, ?, ?)
+       ON CONFLICT(ip) DO UPDATE SET hwids=excluded.hwids`
+    ).bind(ip, JSON.stringify(hwids), first_seen).run();
+
+    try {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid != ? AND created_at < ?").bind(hwid, cutoff).run();
+    } catch {}
+
+    await env.DB.prepare(
+      `INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)
+       ON CONFLICT(hwid) DO UPDATE SET ostime=excluded.ostime, start=0, step1=0, step2=0, created_at=excluded.created_at`
+    ).bind(hwid, ostime, now).run();
+
+    return json({ status: true, message: "initialized" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // STEP 1
+  // ══════════════════════════════════════════════════════════
+  if (type === "step1") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
+
+    await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
+    return json({ status: true, step1: true }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // STEP 2
+  // ══════════════════════════════════════════════════════════
+  if (type === "step2") {
+    const hwid = normalizeHwid(url);
+    const hash = url.searchParams.get("hash");
+    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
+    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
+
+    const elapsed = Math.floor(Date.now() / 1000) - row.created_at;
+    if (elapsed < MIN_STEP2_SECONDS) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      return json({ status: false, error: "bypass_detected" }, 403, request);
+    }
+
+    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    const valid = await checkLinkvertiseHash(hash, token, ua);
+    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
+
+    await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
+    return json({ status: true, step2: true }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // STEP 3
+  // ══════════════════════════════════════════════════════════
+  if (type === "step3") {
+    const hwid = normalizeHwid(url);
+    const hash = url.searchParams.get("hash");
+    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
+    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
+    if (!row.step2) return json({ status: false, error: "step2_not_done" }, 403, request);
+
+    const now     = Math.floor(Date.now() / 1000);
+    const elapsed = now - row.created_at;
+    if (elapsed < MIN_FLOW_SECONDS) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      return json({ status: false, error: "bypass_detected" }, 403, request);
+    }
+
+    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    const valid = await checkLinkvertiseHash(hash, token, ua);
+    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
+
+    if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
+
+    const key = "KEY_" + Math.random().toString().slice(2, 12);
+    try {
+      await env["ntt-system"].put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
+    } catch (kvErr) {
+      return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
+    }
+
+    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+
+    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
+    let hwidsToday = 1;
+    try {
+      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?").bind(clientIp).first();
+      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
+    } catch {}
+
+    ctx.waitUntil(sendWebhook(env.WEBHOOK_URL || WEBHOOK_URL, { hwid, key, ip: clientIp, hwidsToday }));
+    return json({ status: true, key, expires_in: 86400 }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // PROGRESS
+  // ══════════════════════════════════════════════════════════
+  if (type === "progress") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "not_found" }, 404, request);
+
+    return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // DATA — Roblox check key (trả về chuỗi encoded)
+  // GET /?type=data&hwid=xxx
+  // PUBLIC ENDPOINT - Anyone can call this
+  // ══════════════════════════════════════════════════════════
+  if (type === "data") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
+    if (!env["ntt-system"]) return json({ status: false, error: "data_not_bound" }, 500, request);
+
+    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
+    if (!result?.value) return json({ status: false, error: "key_not_found" }, 404, request);
+
+    const key     = result.value;
+    const created = result.metadata?.created;
+    const domain  = result.metadata?.domain;
+    const now     = Math.floor(Date.now() / 1000);
+    const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
+
+    let baseKey = env.ENCODE_KEY || ENCODE_KEY;
+    
+    if (domain) {
+      const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
+        .bind(domain).first();
+      if (settings && settings.encode_key) {
+        baseKey = settings.encode_key;
+      }
+    }
+
+    const payload = key + "|" + left;
+    const encoded = encodeData(payload, baseKey);
+
+    return text(encoded, 200, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // READ — Đọc key theo hwid
+  // GET /api?type=read&hwid=xxx
+  // ══════════════════════════════════════════════════════════
+  if (type === "read") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
+
+    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
+    if (!result?.value)
+      return json({ status: "error", message: "Key not found or expired" }, 404, request);
+
+    const now     = Math.floor(Date.now() / 1000);
+    const created = result.metadata?.created;
+    const left    = created ? Math.max(0, 86400 - (now - created)) : null;
+
+    return json({ status: "success", hwid, key: result.value, left }, 200, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // AUTH: REGISTER
+  // ══════════════════════════════════════════════════════════
+  if (type === "register") {
+    let body;
+    try { body = await request.json(); } 
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { username, email, password } = body;
+    if (!username || !email || !password) 
+      return json({ success: false, error: "All fields required" }, 400, request);
+    
+    // Validate username: letters, numbers, underscore, and spaces only
+    if (!/^[a-zA-Z0-9_ ]+$/.test(username))
+      return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
+    
+    if (username.length < 3 || username.length > 15) 
+      return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
+    if (password.length < 6 || password.length > 20) 
+      return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
+
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? OR email = ?")
+      .bind(username, email).first();
+    if (existing) 
+      return json({ success: false, error: "Username or email exists" }, 409, request);
+
+    const hashedPassword = await hashPassword(password);
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = await env.DB.prepare(
+      "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?) RETURNING id"
+    ).bind(username, email, hashedPassword, now).first();
+
+    const token = await generateToken(result.id, username);
+
+    return json({
+      success: true,
+      message: "Account created",
+      user: { id: result.id, username, email },
+      token,
+    }, 201, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // AUTH: LOGIN
+  // ══════════════════════════════════════════════════════════
+  if (type === "login") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { username, password } = body;
+    if (!username || !password)
+      return json({ success: false, error: "Username and password required" }, 400, request);
+
+    const user = await env.DB.prepare("SELECT * FROM users WHERE username = ? OR email = ?")
+      .bind(username, username).first();
+    if (!user)
+      return json({ success: false, error: "Invalid credentials" }, 401, request);
+
+    const hashedInput = await hashPassword(password);
+    if (hashedInput !== user.password)
+      return json({ success: false, error: "Invalid credentials" }, 401, request);
+
+    const token = await generateToken(user.id, user.username);
+
+    return json({
+      success: true,
+      message: "Login successful",
+      user: { id: user.id, username: user.username, email: user.email },
+      token,
+    }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // AUTH: VERIFY
+  // ══════════════════════════════════════════════════════════
+  if (type === "verify") {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer "))
+      return json({ success: false, error: "No token" }, 401, request);
+
+    const token = authHeader.substring(7);
+    const payload = await verifyToken(token);
+    if (!payload)
+      return json({ success: false, error: "Invalid token" }, 401, request);
+
+    const user = await env.DB.prepare(
+      "SELECT id, username, email, created_at FROM users WHERE id = ?"
+    ).bind(payload.userId).first();
+
+    if (!user)
+      return json({ success: false, error: "User not found" }, 404, request);
+
+    return json({
+      success: true,
+      user: { id: user.id, username: user.username, email: user.email, created_at: user.created_at },
+    }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // SAVE SETTINGS
+  // ══════════════════════════════════════════════════════════
+  if (type === "save_settings") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link } = body;
+    
+    if (!user_id || !website_domain || !linkvertise_token)
+      return json({ success: false, error: "Missing required fields" }, 400, request);
+
+    const finalKeyDomain = (key_domain || 'KEY').toUpperCase();
+    if (finalKeyDomain.length > 6)
+      return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
+
+    const now = Math.floor(Date.now() / 1000);
+    const finalEncodeKey = encode_key || 'ntt-hub';
+
+    await env.DB.prepare(`
+      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        website_domain = excluded.website_domain,
+        key_domain = excluded.key_domain,
+        encode_key = excluded.encode_key,
+        linkvertise_token = excluded.linkvertise_token,
+        discord_webhook = excluded.discord_webhook,
+        ad_steps = excluded.ad_steps,
+        step1_link = excluded.step1_link,
+        step2_link = excluded.step2_link,
+        updated_at = excluded.updated_at
+    `).bind(user_id, website_domain, finalKeyDomain, finalEncodeKey, linkvertise_token, discord_webhook || '', ad_steps, step1_link, step2_link, now, now).run();
+
+    return json({ success: true, message: "Settings saved" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GET SETTINGS BY USER ID
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_settings") {
+    const userId = url.searchParams.get("user_id");
+    if (!userId) return json({ success: false, error: "Missing user_id" }, 400, request);
+
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
+      .bind(userId).first();
+
+    if (!settings)
+      return json({ success: false, error: "Settings not found" }, 404, request);
+
+    return json({ success: true, settings }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GET SETTINGS BY DOMAIN
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_settings_by_domain") {
+    const domain = url.searchParams.get("domain");
+    if (!domain) return json({ success: false, error: "Missing domain" }, 400, request);
+
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    if (!settings)
+      return json({ success: false, error: "Settings not found" }, 404, request);
+
+    return json({ success: true, settings }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // COMPLETE STEP
+  // ══════════════════════════════════════════════════════════
+  if (type === "complete_step") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { hwid, step, hash } = body;
+    if (!hwid || !step) return json({ success: false, error: "Missing params" }, 400, request);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Get or create progress
+    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    
+    if (!progress) {
+      await env.DB.prepare(
+        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
+      ).bind(hwid, now, now).run();
+    }
+
+    // Update step
+    if (step === 'start') {
+      await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
+    } else if (step === 1) {
+      await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
+    } else if (step === 2) {
+      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
+    }
+
+    return json({ success: true, message: `Step ${step} completed` }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CREATE KEY
+  // ══════════════════════════════════════════════════════════
+  if (type === "create_key") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { hwid, domain, key_prefix } = body;
+    if (!hwid || !domain || !key_prefix) 
+      return json({ success: false, error: "Missing params" }, 400, request);
+
+    // Check if all steps completed
+    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    if (!progress || !settings)
+      return json({ success: false, error: "Progress or settings not found" }, 404, request);
+
+    if (!progress.step1)
+      return json({ success: false, error: "Step 1 not completed" }, 403, request);
+
+    if (settings.ad_steps === 2 && !progress.step2)
+      return json({ success: false, error: "Step 2 not completed" }, 403, request);
+
+    // Generate key
+    const now = Math.floor(Date.now() / 1000);
+    const keyId = Math.random().toString().slice(2, 9);
+    const key = `${key_prefix.toUpperCase()}_${keyId}`;
+
+    // Save to KV
+    if (!env["ntt-system"]) 
+      return json({ success: false, error: "KV not bound" }, 500, request);
+
+    await env["ntt-system"].put(`Key/${hwid}`, key, { 
+      expirationTtl: 86400, 
+      metadata: { created: now, domain } 
+    });
+
+    // Update total keys count
+    await env.DB.prepare(
+      "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
+    ).bind(domain).run();
+
+    // Clean up progress
+    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+
+    const updatedSettings = await env.DB.prepare("SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    let hwidsToday = 1;
+    try {
+      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?")
+        .bind(request.headers.get("CF-Connecting-IP") || "unknown").first();
+      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
+    } catch {}
+
+    if (updatedSettings?.discord_webhook) {
+      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
+    }
+
+    return json({ 
+      success: true, 
+      key, 
+      expires_in: 86400,
+      total_keys: updatedSettings?.total_keys || 1
+    }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CHANGE USERNAME
+  // ══════════════════════════════════════════════════════════
+  if (type === "change_username") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, new_username } = body;
+    if (!user_id || !new_username)
+      return json({ success: false, error: "Missing parameters" }, 400, request);
+
+    if (!/^[a-zA-Z0-9_ ]+$/.test(new_username))
+      return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
+
+    if (new_username.length < 3 || new_username.length > 15)
+      return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
+
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? AND id != ?")
+      .bind(new_username, user_id).first();
+    if (existing)
+      return json({ success: false, error: "Username already taken" }, 409, request);
+
+    await env.DB.prepare("UPDATE users SET username = ? WHERE id = ?")
+      .bind(new_username, user_id).run();
+
+    return json({ success: true, message: "Username updated" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CHANGE PASSWORD
+  // ══════════════════════════════════════════════════════════
+  if (type === "change_password") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, current_password, new_password } = body;
+    if (!user_id || !current_password || !new_password)
+      return json({ success: false, error: "Missing parameters" }, 400, request);
+
+    if (new_password.length < 6 || new_password.length > 20)
+      return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
+
+    const user = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
+      .bind(user_id).first();
+    if (!user)
+      return json({ success: false, error: "User not found" }, 404, request);
+
+    const hashedCurrent = await hashPassword(current_password);
+    if (hashedCurrent !== user.password)
+      return json({ success: false, error: "Current password is incorrect" }, 401, request);
+
+    const hashedNew = await hashPassword(new_password);
+    await env.DB.prepare("UPDATE users SET password = ? WHERE id = ?")
+      .bind(hashedNew, user_id).run();
+
+    return json({ success: true, message: "Password updated" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GET SYSTEM TOTAL KEYS
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_system_total") {
+    try {
+      const result = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
+      return json({ success: true, total: result?.total || 0 }, request);
+    } catch (error) {
+      return json({ success: true, total: 0 }, request);
+    }
+  }
+
+  return json({ status: false, error: "invalid_type" }, 400, request);
+}
