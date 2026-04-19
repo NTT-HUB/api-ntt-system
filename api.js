@@ -1,797 +1,396 @@
-// ============================================================
-// NTT HUB - Combined Worker
-// ============================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Get Key - NTT System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Oswald:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --primary: #00ff9d; --primary-dark: #00cc7d;
+      --bg-dark: #0a0e1a; --bg-darker: #050810;
+      --surface: #141824; --text: #e8ecf5; --text-dim: #8892ab;
+      --border: #1f2937; --success: #00ff9d; --pending: #fbbf24; --error: #ff4d6d;
+    }
+    body { font-family: 'IBM Plex Mono', monospace; background: var(--bg-dark); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; position: relative; overflow-x: hidden; }
+    .bg-grid { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 50px 50px; z-index: 0; pointer-events: none; }
+    .container { position: relative; z-index: 1; width: 100%; max-width: 500px; padding: 2rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 2.5rem; box-shadow: 0 20px 60px rgba(0,0,0,0.5); animation: slideUp 0.6s ease; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+    .title { font-family: 'Oswald', sans-serif; font-size: 2rem; text-align: center; margin-bottom: 0.5rem; background: linear-gradient(135deg, var(--primary), #6366f1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { text-align: center; color: var(--text-dim); font-size: 0.875rem; margin-bottom: 2rem; }
+    .steps { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 2rem; }
+    .step { background: var(--bg-darker); border: 2px solid var(--border); border-radius: 12px; padding: 1.5rem; display: flex; align-items: center; gap: 1rem; transition: all 0.3s ease; position: relative; overflow: hidden; }
+    .step::before { content: ''; position: absolute; top: 0; left: 0; width: 0; height: 100%; background: linear-gradient(90deg, rgba(0,255,157,0.1), transparent); transition: width 0.3s ease; }
+    .step.completed::before { width: 100%; }
+    .step.completed { border-color: var(--success); }
+    .step.active-step { border-color: var(--pending); }
+    .step-number { width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.125rem; flex-shrink: 0; transition: all 0.3s ease; position: relative; z-index: 1; }
+    .step.completed .step-number { background: var(--success); border-color: var(--success); color: var(--bg-dark); }
+    .step.active-step .step-number { background: var(--pending); border-color: var(--pending); color: var(--bg-dark); }
+    .step-content { flex: 1; position: relative; z-index: 1; }
+    .step-title { font-weight: 600; margin-bottom: 0.25rem; }
+    .step-desc { font-size: 0.875rem; color: var(--text-dim); }
+    .step-action { position: relative; z-index: 1; }
+    .btn { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; font-family: 'Oswald', sans-serif; font-size: 0.875rem; font-weight: 700; text-transform: uppercase; cursor: pointer; transition: all 0.3s ease; text-decoration: none; display: inline-block; }
+    .btn-primary { background: var(--primary); color: var(--bg-dark); }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,255,157,0.4); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+    .btn-success { background: rgba(0,255,157,0.2); color: var(--success); border: 1px solid var(--success); cursor: default; }
+    .checkmark { display: inline-block; margin-right: 0.5rem; }
+    .create-key-section { margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border); display: none; }
+    .create-key-section.active { display: block; animation: slideUp 0.4s ease; }
+    .btn-create { width: 100%; padding: 1.25rem; background: linear-gradient(135deg, var(--primary), #6366f1); color: var(--bg-dark); font-size: 1rem; }
+    .btn-create:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,255,157,0.5); }
+    .key-result { margin-top: 1.5rem; display: none; }
+    .key-result.active { display: block; animation: slideUp 0.4s ease; }
+    .key-box { background: var(--bg-darker); border: 1px solid var(--success); border-radius: 8px; padding: 1rem; text-align: center; margin-bottom: 1rem; }
+    .key-label { font-size: 0.75rem; color: var(--text-dim); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em; }
+    .key-value { font-size: 1.25rem; font-weight: 700; color: var(--success); word-break: break-all; }
+    .copy-btn { width: 100%; padding: 0.875rem; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+    .copy-btn:hover { border-color: var(--primary); color: var(--primary); }
+    .info-box { background: rgba(0,255,157,0.05); border: 1px solid rgba(0,255,157,0.2); border-radius: 8px; padding: 1rem; margin-top: 1rem; font-size: 0.875rem; color: var(--text-dim); }
+    .error-box { background: rgba(255,77,109,0.1); border: 1px solid var(--error); border-radius: 8px; padding: 1rem; margin-top: 1rem; font-size: 0.875rem; color: var(--error); text-align: center; display: none; }
+    @media (max-width: 640px) { .container { padding: 1rem; } .card { padding: 1.5rem; } .title { font-size: 1.5rem; } }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="container">
+    <div class="card">
+      <h1 class="title">Get Your Key</h1>
+      <p class="subtitle" id="domainDisplay">Loading...</p>
 
-const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
-const SYSTEM_START_LINK = "https://linkvertise.com/1292597/ntt-start/1"; // ← link start của hệ thống
+      <div class="steps">
+        <div class="step" id="startCard">
+          <div class="step-number">S</div>
+          <div class="step-content">
+            <div class="step-title">Start</div>
+            <div class="step-desc">Complete this step first</div>
+          </div>
+          <div class="step-action">
+            <a href="#" class="btn btn-primary" id="startBtn" target="_blank">Start</a>
+          </div>
+        </div>
 
-const MIN_FLOW_SECONDS  = 25;
-const MIN_STEP2_SECONDS = 15;
-// WEBHOOK_URL đã bị xóa — chỉ dùng webhook của từng user
-const SESSION_TTL = 2 * 60 * 60;
-const IP_WINDOW   = 24 * 60 * 60;
-const IP_MAX_HWID = 20;
+        <div class="step" id="step1Card" style="display:none;">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <div class="step-title">Complete Step 1</div>
+            <div class="step-desc">Visit the link and complete the checkpoint</div>
+          </div>
+          <div class="step-action">
+            <button class="btn btn-primary" id="step1Btn" disabled>Start</button>
+          </div>
+        </div>
 
-// ── helpers ──────────────────────────────────────────────────
-const ALLOWED_ORIGINS = [
-  "https://ntt-hub.xyz",
-  "https://www.ntt-hub.xyz",
-  "https://ntt-system.pages.dev",
-  "null",
-];
+        <div class="step" id="step2Card" style="display:none;">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <div class="step-title">Complete Step 2</div>
+            <div class="step-desc">Visit the second link and complete</div>
+          </div>
+          <div class="step-action">
+            <button class="btn btn-primary" id="step2Btn" disabled>Start</button>
+          </div>
+        </div>
+      </div>
 
-function getCors(request) {
-  const origin  = request?.headers?.get("Origin") || "";
-  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : "https://ntt-hub.xyz";
-  return {
-    "Access-Control-Allow-Origin":  allowed,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, User-Agent, Authorization",
-    "Vary": "Origin",
-  };
-}
+      <div class="create-key-section" id="createSection">
+        <button class="btn btn-create" id="createKeyBtn">Generate Key</button>
+        <div class="key-result" id="keyResult">
+          <div class="key-box">
+            <div class="key-label">Your Key</div>
+            <div class="key-value" id="keyValue">LOADING...</div>
+          </div>
+          <button class="btn copy-btn" id="copyBtn">Copy Key</button>
+          <div class="info-box">
+            ✓ Key expires in 24 hours<br>
+            ✓ Total keys created: <span id="keyCount">0</span>
+          </div>
+        </div>
+      </div>
 
-function json(obj, status = 200, request = null) {
-  if (status && typeof status === "object" && status.headers) {
-    request = status;
-    status  = 200;
-  }
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { ...getCors(request), "Content-Type": "application/json" },
-  });
-}
+      <div class="error-box" id="errorBox"></div>
+    </div>
+  </div>
 
-function text(str, status = 200, request = null) {
-  return new Response(str, {
-    status,
-    headers: { ...getCors(request), "Content-Type": "text/plain" },
-  });
-}
+  <script type="module">
+    import API_BASE from './api-base.js';
 
-function normalizeHwid(url) {
-  const raw = url.search.match(/[?&]hwid=([^&]*)/)?.[1];
-  if (!raw) return null;
-  try { return decodeURIComponent(raw).replace(/ /g, "+"); }
-  catch { return raw.replace(/ /g, "+"); }
-}
+    const urlParams = new URLSearchParams(window.location.search);
+    const hash      = urlParams.get('hash') || '';
 
-async function checkLinkvertiseHash(hash, token, userAgent) {
-  const apiUrl = `https://publisher.linkvertise.com/api/v1/anti_bypassing?token=${token}&hash=${encodeURIComponent(hash)}`;
-  try {
-    const res  = await fetch(apiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": userAgent || "Cloudflare-Worker" },
+    // domain: từ URL trước, hoặc localStorage khi Linkvertise redirect về không có ?domain
+    let domain = urlParams.get('domain') || localStorage.getItem('ntt_domain') || '';
+
+    // Callback types — Linkvertise destination phải dùng các param này:
+    // Start:  /key.html?start_done&hash={hash}
+    // Step1:  /key.html?step1_done&hash={hash}
+    // Step2:  /key.html?step2_done&hash={hash}
+    // Nhận cả dạng cũ (?start/?step1/?step2) lẫn dạng mới (?start_done/?step1_done/?step2_done)
+    const isStartDone = urlParams.has('start_done') || urlParams.has('start');
+    const isStep1Done = urlParams.has('step1_done') || urlParams.has('step1');
+    const isStep2Done = urlParams.has('step2_done') || urlParams.has('step2');
+    const isCallback  = isStartDone || isStep1Done || isStep2Done;
+    const hasValidHash = hash.length > 10;
+
+    let settings = null;
+    let hwid     = null;
+
+    function generateHWID() {
+      const canvas = document.createElement('canvas');
+      const ctx    = canvas.getContext('2d');
+      ctx.textBaseline = 'top'; ctx.font = '14px Arial';
+      ctx.fillText('NTT fingerprint', 2, 2);
+      const fp   = canvas.toDataURL();
+      const data = navigator.userAgent + fp + screen.width + screen.height + navigator.language;
+      let h = 0;
+      for (let i = 0; i < data.length; i++) { h = ((h << 5) - h) + data.charCodeAt(i); h = h & h; }
+      return ('HWID_' + Math.abs(h).toString(36).toUpperCase()).slice(0, 50);
+    }
+
+    function showError(msg) {
+      const b = document.getElementById('errorBox');
+      b.textContent = msg; b.style.display = 'block';
+    }
+
+    function checkSavedKey() {
+      const savedKey    = localStorage.getItem('ntt_generated_key');
+      const savedDomain = localStorage.getItem('ntt_key_domain');
+      const savedHwid   = localStorage.getItem('ntt_key_hwid');
+      const curHwid     = generateHWID();
+
+      // Khác domain hoặc khác hwid → xóa key cũ, không hiện
+      if (savedKey && (savedDomain !== domain || savedHwid !== curHwid)) {
+        localStorage.removeItem('ntt_generated_key');
+        localStorage.removeItem('ntt_key_domain');
+        localStorage.removeItem('ntt_key_hwid');
+        return false;
+      }
+
+      // Đúng domain + đúng hwid → hiện lại key
+      if (savedKey && savedDomain === domain && savedHwid === curHwid) {
+        document.getElementById('domainDisplay').textContent = domain;
+        markStepComplete('start');
+        document.getElementById('step1Card').style.display = 'flex';
+        markStepComplete(1);
+        const section = document.getElementById('createSection');
+        section.style.display = 'block';
+        section.classList.add('active');
+        document.getElementById('createKeyBtn').style.display = 'none';
+        document.getElementById('keyValue').textContent = savedKey;
+        document.getElementById('keyResult').classList.add('active');
+        return true;
+      }
+      return false;
+    }
+
+    async function loadSettings() {
+      if (!domain) { showError('No domain specified'); return; }
+      try {
+        const res  = await fetch(`${API_BASE}/?type=get_settings_by_domain&domain=${encodeURIComponent(domain)}`);
+        const data = await res.json();
+        if (!data.success) { showError('Domain not found'); return; }
+
+        settings = data.settings;
+        document.getElementById('domainDisplay').textContent = settings.website_domain;
+
+        // Start link của hệ thống, destination phải là: /key.html?start_done&hash={hash}
+        document.getElementById('startBtn').href = settings.start_link;
+
+        if (settings.ad_steps === 2) document.getElementById('step2Card').style.display = 'flex';
+
+        hwid = localStorage.getItem('ntt_hwid') || generateHWID();
+        localStorage.setItem('ntt_hwid', hwid);
+
+        await checkProgress();
+        setInterval(checkProgress, 4000);
+      } catch { showError('Failed to load settings'); }
+    }
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      // Lưu domain + hwid trước khi rời trang sang Linkvertise
+      localStorage.setItem('ntt_domain', domain);
+      localStorage.setItem('ntt_hwid', hwid || generateHWID());
     });
-    const data = await res.json();
-    return data?.status === true;
-  } catch { return false; }
-}
 
-// ── encode helpers ────────────────────────────────────────────
-function simpleHash(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash * 131 + str.charCodeAt(i)) % 4294967296;
-  }
-  return hash;
-}
+    async function checkProgress() {
+      if (!hwid || !settings) return;
+      try {
+        const res  = await fetch(`${API_BASE}/?type=progress&hwid=${encodeURIComponent(hwid)}`);
+        const data = await res.json();
+        if (!data.status) return;
 
-function toHex(str) {
-  return [...str].map(c =>
-    c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()
-  ).join("");
-}
+        if (data.start) {
+          markStepComplete('start');
+        }
 
-function encodeData(plaintext, baseKey) {
-  const t = Math.floor(Date.now() / 1000);
-  const rawKey    = String(baseKey) + ":" + String(t);
-  const hashedKey = simpleHash(rawKey);
+        if (data.step1) {
+          // step1 done = start cũng done
+          markStepComplete('start');
+          markStepComplete(1);
+          if (settings.ad_steps === 1) {
+            showCreateButton();
+          } else if (data.step2) {
+            markStepComplete(2);
+            showCreateButton();
+          } else {
+            enableStep2();
+          }
+        } else if (data.start) {
+          // start done nhưng chưa step1
+          enableStep1();
+        }
+      } catch {}
+    }
 
-  const result = [];
-  for (let i = 0; i < plaintext.length; i++) {
-    const byte = plaintext.charCodeAt(i);
-    const k    = (hashedKey + (i + 1) * 7) % 256;
-    let encoded = (byte ^ k);
-    encoded = (encoded + k) % 256;
-    result.push(String.fromCharCode(encoded));
-  }
+    function enableStep1() {
+      const card = document.getElementById('step1Card');
+      card.style.display = 'flex'; card.classList.add('active-step');
+      const btn = document.getElementById('step1Btn');
+      btn.disabled = false;
+      btn.onclick = () => {
+        localStorage.setItem('ntt_domain', domain);
+        localStorage.setItem('ntt_hwid', hwid);
+        window.open(settings.step1_link, '_blank');
+      };
+    }
 
-  const encodedStr  = toHex(result.join(""));
-  const timeEncoded = Math.floor(simpleHash(String(t) + "salt")).toString();
-  return timeEncoded + "|" + t + "|" + encodedStr;
-}
+    function enableStep2() {
+      const card = document.getElementById('step2Card');
+      card.style.display = 'flex'; card.classList.add('active-step');
+      const btn = document.getElementById('step2Btn');
+      btn.disabled = false;
+      btn.onclick = () => {
+        localStorage.setItem('ntt_domain', domain);
+        localStorage.setItem('ntt_hwid', hwid);
+        window.open(settings.step2_link, '_blank');
+      };
+    }
 
-// ── Discord webhook — chỉ dùng webhook của user ──────────────
-async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
-  if (!webhookUrl) return;
+    function markStepComplete(step) {
+      const id   = step === 'start' ? 'startCard' : `step${step}Card`;
+      const card = document.getElementById(id);
+      card.classList.remove('active-step'); card.classList.add('completed');
+      const btn = card.querySelector('.btn');
+      btn.className = 'btn btn-success';
+      btn.innerHTML = '<span class="checkmark">✓</span> Completed';
+      btn.style.pointerEvents = 'none';
+    }
 
-  const embed = {
-    title: "New Key Generated",
-    color: 0x00ff9d,
-    fields: [
-      { name: "HWID",  value: `\`${hwid}\``, inline: false },
-      { name: "Key",   value: `\`${key}\``,  inline: false },
-      { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true },
-    ],
-    footer: { text: "NTT System" },
-    timestamp: new Date().toISOString(),
-  };
+    function showCreateButton() {
+      const s = document.getElementById('createSection');
+      s.style.display = 'block'; s.classList.add('active');
+    }
 
-  try {
-    await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ embeds: [embed] }),
+    async function completeStep(step) {
+      try {
+        const res  = await fetch(`${API_BASE}/?type=complete_step`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hwid, step, hash, domain }),
+        });
+        const data = await res.json();
+        return data.success;
+      } catch { return false; }
+    }
+
+    document.getElementById('createKeyBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('createKeyBtn');
+      btn.disabled = true; btn.textContent = 'Generating...';
+      try {
+        const res  = await fetch(`${API_BASE}/?type=create_key`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hwid, domain: settings.website_domain, key_prefix: settings.key_domain }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('keyValue').textContent = data.key;
+          document.getElementById('keyCount').textContent = data.total_keys || 1;
+          document.getElementById('keyResult').classList.add('active');
+          btn.style.display = 'none';
+          // Lưu key để không mất khi reload — gắn với hwid + domain
+          localStorage.setItem('ntt_generated_key',    data.key);
+          localStorage.setItem('ntt_key_domain',       domain);
+          localStorage.setItem('ntt_key_hwid',         hwid);
+          localStorage.removeItem('ntt_domain');
+          localStorage.removeItem('ntt_hwid');
+        } else {
+          showError(data.error || 'Failed to create key');
+          btn.disabled = false; btn.textContent = 'Generate Key';
+        }
+      } catch {
+        showError('Connection error');
+        btn.disabled = false; btn.textContent = 'Generate Key';
+      }
     });
-  } catch {}
-}
 
-// ── Auth helpers ──────────────────────────────────────────────
-const JWT_SECRET = "ntt-hub-jwt-secret-change-this";
-const SESSION_DURATION = 7 * 24 * 60 * 60; // 7 days
-
-async function hashPassword(password) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + "ntt-salt-key");
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function generateToken(userId, username) {
-  const header  = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const payload = btoa(JSON.stringify({
-    userId,
-    username,
-    exp: Math.floor(Date.now() / 1000) + SESSION_DURATION,
-  }));
-  const signature = await hashPassword(header + "." + payload + JWT_SECRET);
-  return `${header}.${payload}.${signature.substring(0, 43)}`;
-}
-
-async function verifyToken(token) {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1]));
-    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-    const expectedSig = await hashPassword(parts[0] + "." + parts[1] + JWT_SECRET);
-    if (!expectedSig.startsWith(parts[2])) return null;
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-// ── main handler ──────────────────────────────────────────────
-export default {
-  async fetch(request, env, ctx) {
-    try { return await handleRequest(request, env, ctx); }
-    catch (err) {
-      return new Response(JSON.stringify({ status: false, error: "internal_error", message: err?.message || "unknown" }), {
-        status:  500,
-        headers: { ...getCors(request), "Content-Type": "application/json" },
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      navigator.clipboard.writeText(document.getElementById('keyValue').textContent).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => { btn.textContent = 'Copy Key'; }, 2000);
       });
-    }
-  },
-};
-
-async function handleRequest(request, env, ctx) {
-  const url  = new URL(request.url);
-  const type = url.searchParams.get("type");
-  const ua   = request.headers.get("User-Agent") || "";
-
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: getCors(request) });
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // INIT
-  // ══════════════════════════════════════════════════════════
-  if (type === "init") {
-    let hwid, ostime;
-    try {
-      const body = await request.json();
-      hwid   = typeof body.hwid === "string" ? body.hwid.replace(/ /g, "+") : body.hwid;
-      ostime = body.ostime;
-    } catch { return json({ status: false, error: "invalid_body" }, 400, request); }
-
-    if (!hwid || !ostime) return json({ status: false, error: "missing_params" }, 400, request);
-
-    const now    = Math.floor(Date.now() / 1000);
-    const cutoff = now - SESSION_TTL;
-    const ip     = request.headers.get("CF-Connecting-IP") || "unknown";
-
-    const blRow = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip = ?").bind(ip).first();
-    if (blRow) return json({ status: false, error: "ip_blacklisted" }, 403, request);
-
-    let trackRow = await env.DB.prepare("SELECT hwids, first_seen FROM ip_tracking WHERE ip = ?").bind(ip).first();
-    let hwids      = [];
-    let first_seen = now;
-
-    if (trackRow) {
-      if (now - trackRow.first_seen > IP_WINDOW) {
-        await env.DB.prepare("DELETE FROM ip_tracking WHERE ip = ?").bind(ip).run();
-      } else {
-        try { hwids = JSON.parse(trackRow.hwids); } catch {}
-        first_seen = trackRow.first_seen;
-      }
-    }
-
-    if (!hwids.includes(hwid)) hwids.push(hwid);
-
-    if (hwids.length >= IP_MAX_HWID) {
-      await env.DB.prepare(
-        "INSERT INTO ip_blacklist (ip, banned_at, reason) VALUES (?, ?, ?) ON CONFLICT(ip) DO NOTHING"
-      ).bind(ip, now, "exceeded_hwid_limit").run();
-      return json({ status: false, error: "ip_blacklisted", reason: "exceeded_hwid_limit" }, 403, request);
-    }
-
-    await env.DB.prepare(
-      `INSERT INTO ip_tracking (ip, hwids, first_seen) VALUES (?, ?, ?)
-       ON CONFLICT(ip) DO UPDATE SET hwids=excluded.hwids`
-    ).bind(ip, JSON.stringify(hwids), first_seen).run();
-
-    try {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid != ? AND created_at < ?").bind(hwid, cutoff).run();
-    } catch {}
-
-    await env.DB.prepare(
-      `INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)
-       ON CONFLICT(hwid) DO UPDATE SET ostime=excluded.ostime, start=0, step1=0, step2=0, created_at=excluded.created_at`
-    ).bind(hwid, ostime, now).run();
-
-    return json({ status: true, message: "initialized" }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // STEP 1
-  // ══════════════════════════════════════════════════════════
-  if (type === "step1") {
-    const hwid = normalizeHwid(url);
-    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
-
-    await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
-    return json({ status: true, step1: true }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // STEP 2
-  // ══════════════════════════════════════════════════════════
-  if (type === "step2") {
-    const hwid = normalizeHwid(url);
-    const hash = url.searchParams.get("hash");
-    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
-    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
-
-    const elapsed = Math.floor(Date.now() / 1000) - row.created_at;
-    if (elapsed < MIN_STEP2_SECONDS) {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-      return json({ status: false, error: "bypass_detected" }, 403, request);
-    }
-
-    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    const valid = await checkLinkvertiseHash(hash, token, ua);
-    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
-
-    await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
-    return json({ status: true, step2: true }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // STEP 3
-  // ══════════════════════════════════════════════════════════
-  if (type === "step3") {
-    const hwid = normalizeHwid(url);
-    const hash = url.searchParams.get("hash");
-    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
-    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
-    if (!row.step2) return json({ status: false, error: "step2_not_done" }, 403, request);
-
-    const now     = Math.floor(Date.now() / 1000);
-    const elapsed = now - row.created_at;
-    if (elapsed < MIN_FLOW_SECONDS) {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-      return json({ status: false, error: "bypass_detected" }, 403, request);
-    }
-
-    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    const valid = await checkLinkvertiseHash(hash, token, ua);
-    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
-
-    if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
-
-    const key = "KEY_" + Math.random().toString().slice(2, 12);
-    try {
-      await env["ntt-system"].put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
-    } catch (kvErr) {
-      return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
-    }
-
-    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-    return json({ status: true, key, expires_in: 86400 }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // PROGRESS
-  // ══════════════════════════════════════════════════════════
-  if (type === "progress") {
-    const hwid = normalizeHwid(url);
-    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "not_found" }, 404, request);
-
-    return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // DATA — Roblox check key
-  // ══════════════════════════════════════════════════════════
-  if (type === "data") {
-    const hwid = normalizeHwid(url);
-    if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
-    if (!env["ntt-system"]) return json({ status: false, error: "data_not_bound" }, 500, request);
-
-    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
-    if (!result?.value) return json({ status: false, error: "key_not_found" }, 404, request);
-
-    const key     = result.value;
-    const created = result.metadata?.created;
-    const domain  = result.metadata?.domain;
-    const now     = Math.floor(Date.now() / 1000);
-    const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
-
-    let baseKey = env.ENCODE_KEY || "ntt-hub";
-
-    if (domain) {
-      const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
-        .bind(domain).first();
-      if (settings && settings.encode_key) {
-        baseKey = settings.encode_key;
-      }
-    }
-
-    const payload = key + "|" + left;
-    const encoded = encodeData(payload, baseKey);
-
-    return text(encoded, 200, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // READ — Đọc key theo hwid
-  // ══════════════════════════════════════════════════════════
-  if (type === "read") {
-    const hwid = normalizeHwid(url);
-    if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
-
-    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
-    if (!result?.value)
-      return json({ status: "error", message: "Key not found or expired" }, 404, request);
-
-    const now     = Math.floor(Date.now() / 1000);
-    const created = result.metadata?.created;
-    const left    = created ? Math.max(0, 86400 - (now - created)) : null;
-
-    return json({ status: "success", hwid, key: result.value, left }, 200, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // GET START LINK — Trả về link start của hệ thống
-  // ══════════════════════════════════════════════════════════
-  if (type === "get_start_link") {
-    return json({
-      success: true,
-      start_link: env.SYSTEM_START_LINK || SYSTEM_START_LINK,
-    }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // AUTH: REGISTER
-  // ══════════════════════════════════════════════════════════
-  if (type === "register") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { username, email, password } = body;
-    if (!username || !email || !password)
-      return json({ success: false, error: "All fields required" }, 400, request);
-
-    if (!/^[a-zA-Z0-9_ ]+$/.test(username))
-      return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
-
-    if (username.length < 3 || username.length > 15)
-      return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
-    if (password.length < 6 || password.length > 20)
-      return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
-
-    const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? OR email = ?")
-      .bind(username, email).first();
-    if (existing)
-      return json({ success: false, error: "Username or email exists" }, 409, request);
-
-    const hashedPassword = await hashPassword(password);
-    const now = Math.floor(Date.now() / 1000);
-
-    const result = await env.DB.prepare(
-      "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?) RETURNING id"
-    ).bind(username, email, hashedPassword, now).first();
-
-    const token = await generateToken(result.id, username);
-
-    return json({
-      success: true,
-      message: "Account created",
-      user: { id: result.id, username, email },
-      token,
-    }, 201, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // AUTH: LOGIN
-  // ══════════════════════════════════════════════════════════
-  if (type === "login") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { username, password } = body;
-    if (!username || !password)
-      return json({ success: false, error: "Username and password required" }, 400, request);
-
-    const user = await env.DB.prepare("SELECT * FROM users WHERE username = ? OR email = ?")
-      .bind(username, username).first();
-    if (!user)
-      return json({ success: false, error: "Invalid credentials" }, 401, request);
-
-    const hashedInput = await hashPassword(password);
-    if (hashedInput !== user.password)
-      return json({ success: false, error: "Invalid credentials" }, 401, request);
-
-    const token = await generateToken(user.id, user.username);
-
-    return json({
-      success: true,
-      message: "Login successful",
-      user: { id: user.id, username: user.username, email: user.email },
-      token,
-    }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // AUTH: VERIFY
-  // ══════════════════════════════════════════════════════════
-  if (type === "verify") {
-    const authHeader = request.headers.get("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer "))
-      return json({ success: false, error: "No token" }, 401, request);
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload)
-      return json({ success: false, error: "Invalid token" }, 401, request);
-
-    const user = await env.DB.prepare(
-      "SELECT id, username, email, created_at FROM users WHERE id = ?"
-    ).bind(payload.userId).first();
-
-    if (!user)
-      return json({ success: false, error: "User not found" }, 404, request);
-
-    return json({
-      success: true,
-      user: { id: user.id, username: user.username, email: user.email, created_at: user.created_at },
-    }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // SAVE SETTINGS — không có start_link nữa
-  // ══════════════════════════════════════════════════════════
-  if (type === "save_settings") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const {
-      user_id, website_domain, key_domain, encode_key,
-      linkvertise_token, discord_webhook, ad_steps,
-      step1_link, step2_link,
-    } = body;
-
-    if (!user_id || !website_domain)
-      return json({ success: false, error: "Missing required fields" }, 400, request);
-
-    // Sanitize domain: space → dash, chỉ giữ chữ/số/dash, lowercase, tối đa 15 ký tự
-    const finalDomain = website_domain
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9\-]/g, "")
-      .slice(0, 15);
-
-    if (!finalDomain)
-      return json({ success: false, error: "Invalid website domain" }, 400, request);
-
-    const finalKeyDomain = (key_domain || "KEY").toUpperCase();
-    if (finalKeyDomain.length > 6)
-      return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
-
-    const now            = Math.floor(Date.now() / 1000);
-    const finalEncodeKey = encode_key || "ntt-hub";
-
-    // Lấy existing để không ghi đè các field không được gửi lên bằng null/undefined
-    const existing = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
-      .bind(user_id).first();
-
-    const finalToken   = linkvertise_token !== undefined ? linkvertise_token : (existing?.linkvertise_token || "");
-    const finalWebhook = discord_webhook   !== undefined ? discord_webhook   : (existing?.discord_webhook   || "");
-    const finalSteps   = ad_steps          !== undefined ? ad_steps          : (existing?.ad_steps          || 1);
-    const finalStep1   = step1_link        !== undefined ? step1_link        : (existing?.step1_link        || "");
-    const finalStep2   = step2_link        !== undefined ? step2_link        : (existing?.step2_link        || "");
-
-    await env.DB.prepare(`
-      INSERT INTO user_settings
-        (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(user_id) DO UPDATE SET
-        website_domain    = excluded.website_domain,
-        key_domain        = excluded.key_domain,
-        encode_key        = excluded.encode_key,
-        linkvertise_token = excluded.linkvertise_token,
-        discord_webhook   = excluded.discord_webhook,
-        ad_steps          = excluded.ad_steps,
-        step1_link        = excluded.step1_link,
-        step2_link        = excluded.step2_link,
-        updated_at        = excluded.updated_at
-    `).bind(
-      user_id, finalDomain, finalKeyDomain, finalEncodeKey,
-      finalToken, finalWebhook, finalSteps,
-      finalStep1, finalStep2, now, now,
-    ).run();
-
-    return json({ success: true, message: "Settings saved", website_domain: finalDomain }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // GET SETTINGS BY USER ID
-  // ══════════════════════════════════════════════════════════
-  if (type === "get_settings") {
-    const userId = url.searchParams.get("user_id");
-    if (!userId) return json({ success: false, error: "Missing user_id" }, 400, request);
-
-    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
-      .bind(userId).first();
-
-    if (!settings)
-      return json({ success: false, error: "Settings not found" }, 404, request);
-
-    return json({ success: true, settings }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // GET SETTINGS BY DOMAIN — thêm start_link hệ thống vào response
-  // ══════════════════════════════════════════════════════════
-  if (type === "get_settings_by_domain") {
-    const domain = url.searchParams.get("domain");
-    if (!domain) return json({ success: false, error: "Missing domain" }, 400, request);
-
-    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
-      .bind(domain).first();
-
-    if (!settings)
-      return json({ success: false, error: "Settings not found" }, 404, request);
-
-    // Luôn dùng start_link của hệ thống, không dùng start_link của user
-    return json({
-      success: true,
-      settings: {
-        ...settings,
-        start_link: env.SYSTEM_START_LINK || SYSTEM_START_LINK,
-      },
-    }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // COMPLETE STEP
-  // ══════════════════════════════════════════════════════════
-  if (type === "complete_step") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { hwid, step, hash, domain } = body;
-    if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
-
-    // Bắt buộc có hash
-    if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
-
-    // Lấy token của user (theo domain), không dùng token admin
-    const userSettings = await env.DB.prepare(
-      "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
-    ).bind(domain).first();
-
-    if (!userSettings?.linkvertise_token)
-      return json({ success: false, error: "domain_not_found" }, 404, request);
-
-    // Verify hash với token của user
-    const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
-    if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
-
-    const now = Math.floor(Date.now() / 1000);
-
-    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-
-    if (!progress) {
-      await env.DB.prepare(
-        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
-      ).bind(hwid, now, now).run();
-    }
-
-    if (step === "start") {
-      await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
-    } else if (step === 1) {
-      // Mark start=1 luôn khi step1 done (trong trường hợp 1 step, start và step1 gộp chung)
-      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
-    } else if (step === 2) {
-      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
-    }
-
-    return json({ success: true, message: `Step ${step} completed` }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // CREATE KEY
-  // ══════════════════════════════════════════════════════════
-  if (type === "create_key") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { hwid, domain, key_prefix } = body;
-    if (!hwid || !domain || !key_prefix)
-      return json({ success: false, error: "Missing params" }, 400, request);
-
-    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
-      .bind(domain).first();
-
-    if (!settings)
-      return json({ success: false, error: "Settings not found" }, 404, request);
-
-    // Không có progress = chưa hoàn thành bất kỳ step nào
-    if (!progress)
-      return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
-
-    if (!progress.step1)
-      return json({ success: false, error: "Step 1 not completed" }, 403, request);
-
-    if (settings.ad_steps === 2 && !progress.step2)
-      return json({ success: false, error: "Step 2 not completed" }, 403, request);
-
-    const now   = Math.floor(Date.now() / 1000);
-    const keyId = Math.random().toString().slice(2, 9);
-    const key   = `${key_prefix.toUpperCase()}_${keyId}`;
-
-    if (!env["ntt-system"])
-      return json({ success: false, error: "KV not bound" }, 500, request);
-
-    await env["ntt-system"].put(`Key/${hwid}`, key, {
-      expirationTtl: 86400,
-      metadata: { created: now, domain },
     });
 
-    await env.DB.prepare(
-      "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
-    ).bind(domain).run();
+    // ═══════════════════════════════════════════════════════
+    // INIT
+    // ═══════════════════════════════════════════════════════
+    async function init() {
 
-    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      // ── Callback từ Linkvertise (có start_done / step1_done / step2_done) ──
+      if (isCallback) {
+        // domain: ưu tiên từ URL, fallback localStorage (khi admin link không có domain)
+        domain = urlParams.get('domain') || localStorage.getItem('ntt_domain') || '';
+        hwid   = localStorage.getItem('ntt_hwid') || generateHWID();
 
-    const updatedSettings = await env.DB.prepare(
-      "SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?"
-    ).bind(domain).first();
+        if (!domain) {
+          showError('Session lost. Please go back and start over.');
+          return;
+        }
 
-    let hwidsToday = 1;
-    try {
-      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?")
-        .bind(request.headers.get("CF-Connecting-IP") || "unknown").first();
-      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
-    } catch {}
+        if (!hasValidHash) {
+          showError('Invalid access detected.');
+          setTimeout(() => window.location.replace(`/key.html?domain=${encodeURIComponent(domain)}`), 1500);
+          return;
+        }
 
-    // Chỉ gửi webhook của user, không còn webhook hệ thống
-    if (updatedSettings?.discord_webhook) {
-      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
+        // Lưu lại để chắc chắn
+        localStorage.setItem('ntt_domain', domain);
+        localStorage.setItem('ntt_hwid',   hwid);
+
+        const step = isStartDone ? 'start' : isStep1Done ? 1 : 2;
+        const ok   = await completeStep(step);
+
+        if (ok) {
+          window.location.replace(`/key.html?domain=${encodeURIComponent(domain)}`);
+        } else {
+          showError('Verification failed. Redirecting...');
+          setTimeout(() => window.location.replace(`/key.html?domain=${encodeURIComponent(domain)}`), 2000);
+        }
+        return;
+      }
+
+      // ── Normal flow: ?domain=xxx ─────────────────────────
+      if (urlParams.get('domain')) {
+        localStorage.setItem('ntt_domain', domain);
+      }
+
+      if (!domain) {
+        showError('No domain specified. Please use the correct link.');
+        return;
+      }
+
+      // Nếu đã có key đúng domain + hwid → hiện luôn, không cần load lại
+      if (checkSavedKey()) return;
+
+      await loadSettings();
     }
 
-    return json({
-      success: true,
-      key,
-      expires_in: 86400,
-      total_keys: updatedSettings?.total_keys || 1,
-    }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // CHANGE USERNAME
-  // ══════════════════════════════════════════════════════════
-  if (type === "change_username") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { user_id, new_username } = body;
-    if (!user_id || !new_username)
-      return json({ success: false, error: "Missing parameters" }, 400, request);
-
-    if (!/^[a-zA-Z0-9_ ]+$/.test(new_username))
-      return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
-
-    if (new_username.length < 3 || new_username.length > 15)
-      return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
-
-    const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? AND id != ?")
-      .bind(new_username, user_id).first();
-    if (existing)
-      return json({ success: false, error: "Username already taken" }, 409, request);
-
-    await env.DB.prepare("UPDATE users SET username = ? WHERE id = ?")
-      .bind(new_username, user_id).run();
-
-    return json({ success: true, message: "Username updated" }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // CHANGE PASSWORD
-  // ══════════════════════════════════════════════════════════
-  if (type === "change_password") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { user_id, current_password, new_password } = body;
-    if (!user_id || !current_password || !new_password)
-      return json({ success: false, error: "Missing parameters" }, 400, request);
-
-    if (new_password.length < 6 || new_password.length > 20)
-      return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
-
-    const user = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
-      .bind(user_id).first();
-    if (!user)
-      return json({ success: false, error: "User not found" }, 404, request);
-
-    const hashedCurrent = await hashPassword(current_password);
-    if (hashedCurrent !== user.password)
-      return json({ success: false, error: "Current password is incorrect" }, 401, request);
-
-    const hashedNew = await hashPassword(new_password);
-    await env.DB.prepare("UPDATE users SET password = ? WHERE id = ?")
-      .bind(hashedNew, user_id).run();
-
-    return json({ success: true, message: "Password updated" }, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // GET SYSTEM TOTAL KEYS
-  // ══════════════════════════════════════════════════════════
-  if (type === "get_system_total") {
-    try {
-      const result = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
-      return json({ success: true, total: result?.total || 0 }, request);
-    } catch {
-      return json({ success: true, total: 0 }, request);
-    }
-  }
-
-  return json({ status: false, error: "invalid_type" }, 400, request);
-}
+    init();
+  </script>
+</body>
+</html>
