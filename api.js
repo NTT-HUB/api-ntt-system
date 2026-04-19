@@ -3,7 +3,7 @@
 // ============================================================
 
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
-const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi"; // ← link start của hệ thống
+const SYSTEM_START_LINK = "https://linkvertise.com/1292597/ntt-start/1"; // ← link start của hệ thống
 
 const MIN_FLOW_SECONDS  = 25;
 const MIN_STEP2_SECONDS = 15;
@@ -641,7 +641,8 @@ async function handleRequest(request, env, ctx) {
     if (step === "start") {
       await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 1) {
-      await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
+      // Mark start=1 luôn khi step1 done (trong trường hợp 1 step, start và step1 gộp chung)
+      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 2) {
       await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
     }
@@ -665,8 +666,12 @@ async function handleRequest(request, env, ctx) {
     const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
       .bind(domain).first();
 
-    if (!progress || !settings)
-      return json({ success: false, error: "Progress or settings not found" }, 404, request);
+    if (!settings)
+      return json({ success: false, error: "Settings not found" }, 404, request);
+
+    // Không có progress = chưa hoàn thành bất kỳ step nào
+    if (!progress)
+      return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
 
     if (!progress.step1)
       return json({ success: false, error: "Step 1 not completed" }, 403, request);
