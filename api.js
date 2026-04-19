@@ -16,6 +16,7 @@ const ALLOWED_ORIGINS = [
   "https://ntt-hub.xyz",
   "https://www.ntt-hub.xyz",
   "https://ntt-system.pages.dev",
+  "https://ntt-system.xyz",
   "null",
 ];
 
