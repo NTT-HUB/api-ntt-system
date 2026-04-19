@@ -743,8 +743,8 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { user_id, new_username } = body;
-    if (!user_id || !new_username)
+    const { user_id, new_username, password } = body;
+    if (!user_id || !new_username || !password)
       return json({ success: false, error: "Missing parameters" }, 400, request);
 
     if (!/^[a-zA-Z0-9_ ]+$/.test(new_username))
@@ -752,6 +752,14 @@ async function handleRequest(request, env, ctx) {
 
     if (new_username.length < 3 || new_username.length > 15)
       return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
+
+    // Verify password trước khi đổi tên
+    const userCheck = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
+      .bind(user_id).first();
+    if (!userCheck) return json({ success: false, error: "User not found" }, 404, request);
+    const hashedInput = await hashPassword(password);
+    if (hashedInput !== userCheck.password)
+      return json({ success: false, error: "Incorrect password" }, 401, request);
 
     const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? AND id != ?")
       .bind(new_username, user_id).first();
