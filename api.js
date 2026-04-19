@@ -16,6 +16,7 @@ const IP_MAX_HWID = 20;
 const ALLOWED_ORIGINS = [
   "https://ntt-hub.xyz",
   "https://www.ntt-hub.xyz",
+  "https://ntt-system.pages.dev",
   "null",
 ];
 
@@ -25,7 +26,7 @@ function getCors(request) {
   return {
     "Access-Control-Allow-Origin":  allowed,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, User-Agent",
+    "Access-Control-Allow-Headers": "Content-Type, User-Agent, Authorization",
     "Vary": "Origin",
   };
 }
@@ -122,6 +123,43 @@ async function sendWebhook(webhookUrl, { hwid, key, ip, hwidsToday }) {
       body:    JSON.stringify({ embeds: [embed] }),
     });
   } catch {}
+}
+
+// ── Auth helpers ─────────────────────────────────────────────
+const JWT_SECRET = "ntt-hub-jwt-secret-change-this";
+const SESSION_DURATION = 7 * 24 * 60 * 60; // 7 days
+
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + "ntt-salt-key");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function generateToken(userId, username) {
+  const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const payload = btoa(JSON.stringify({
+    userId,
+    username,
+    exp: Math.floor(Date.now() / 1000) + SESSION_DURATION,
+  }));
+  const signature = await hashPassword(header + "." + payload + JWT_SECRET);
+  return `${header}.${payload}.${signature.substring(0, 43)}`;
+}
+
+async function verifyToken(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    const expectedSig = await hashPassword(parts[0] + "." + parts[1] + JWT_SECRET);
+    if (!expectedSig.startsWith(parts[2])) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 // ── main handler ─────────────────────────────────────────────
@@ -269,11 +307,11 @@ async function handleRequest(request, env, ctx) {
     const valid = await checkLinkvertiseHash(hash, token, ua);
     if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
 
-    if (!env.NTT_SYSTEM) return json({ status: false, error: "kv_not_bound" }, 500, request);
+    if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
 
     const key = "KEY_" + Math.random().toString().slice(2, 12);
     try {
-      await env.NTT_SYSTEM.put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
+      await env["ntt-system"].put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
     } catch (kvErr) {
       return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
     }
@@ -306,14 +344,15 @@ async function handleRequest(request, env, ctx) {
 
   // ══════════════════════════════════════════════════════════
   // DATA — Roblox check key (trả về chuỗi encoded)
-  // GET /api?type=data&hwid=xxx
+  // GET /?type=data&hwid=xxx
+  // PUBLIC ENDPOINT - Anyone can call this
   // ══════════════════════════════════════════════════════════
   if (type === "data") {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
-    if (!env.NTT_SYSTEM) return json({ status: false, error: "data_not_bound" }, 500, request);
+    if (!env["ntt-system"]) return json({ status: false, error: "data_not_bound" }, 500, request);
 
-    const result = await env.NTT_SYSTEM.getWithMetadata(`Key/${hwid}`);
+    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
     if (!result?.value) return json({ status: false, error: "key_not_found" }, 404, request);
 
     const key     = result.value;
@@ -336,7 +375,7 @@ async function handleRequest(request, env, ctx) {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
 
-    const result = await env.NTT_SYSTEM.getWithMetadata(`Key/${hwid}`);
+    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
     if (!result?.value)
       return json({ status: "error", message: "Key not found or expired" }, 404, request);
 
@@ -345,6 +384,258 @@ async function handleRequest(request, env, ctx) {
     const left    = created ? Math.max(0, 86400 - (now - created)) : null;
 
     return json({ status: "success", hwid, key: result.value, left }, 200, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // AUTH: REGISTER
+  // ══════════════════════════════════════════════════════════
+  if (type === "register") {
+    let body;
+    try { body = await request.json(); } 
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { username, email, password } = body;
+    if (!username || !email || !password) 
+      return json({ success: false, error: "All fields required" }, 400, request);
+    if (username.length < 3) 
+      return json({ success: false, error: "Username must be 3+ chars" }, 400, request);
+    if (password.length < 6) 
+      return json({ success: false, error: "Password must be 6+ chars" }, 400, request);
+
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? OR email = ?")
+      .bind(username, email).first();
+    if (existing) 
+      return json({ success: false, error: "Username or email exists" }, 409, request);
+
+    const hashedPassword = await hashPassword(password);
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = await env.DB.prepare(
+      "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?) RETURNING id"
+    ).bind(username, email, hashedPassword, now).first();
+
+    const token = await generateToken(result.id, username);
+
+    return json({
+      success: true,
+      message: "Account created",
+      user: { id: result.id, username, email },
+      token,
+    }, 201, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // AUTH: LOGIN
+  // ══════════════════════════════════════════════════════════
+  if (type === "login") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { username, password } = body;
+    if (!username || !password)
+      return json({ success: false, error: "Username and password required" }, 400, request);
+
+    const user = await env.DB.prepare("SELECT * FROM users WHERE username = ? OR email = ?")
+      .bind(username, username).first();
+    if (!user)
+      return json({ success: false, error: "Invalid credentials" }, 401, request);
+
+    const hashedInput = await hashPassword(password);
+    if (hashedInput !== user.password)
+      return json({ success: false, error: "Invalid credentials" }, 401, request);
+
+    const token = await generateToken(user.id, user.username);
+
+    return json({
+      success: true,
+      message: "Login successful",
+      user: { id: user.id, username: user.username, email: user.email },
+      token,
+    }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // AUTH: VERIFY
+  // ══════════════════════════════════════════════════════════
+  if (type === "verify") {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer "))
+      return json({ success: false, error: "No token" }, 401, request);
+
+    const token = authHeader.substring(7);
+    const payload = await verifyToken(token);
+    if (!payload)
+      return json({ success: false, error: "Invalid token" }, 401, request);
+
+    const user = await env.DB.prepare(
+      "SELECT id, username, email, created_at FROM users WHERE id = ?"
+    ).bind(payload.userId).first();
+
+    if (!user)
+      return json({ success: false, error: "User not found" }, 404, request);
+
+    return json({
+      success: true,
+      user: { id: user.id, username: user.username, email: user.email, created_at: user.created_at },
+    }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // SAVE SETTINGS
+  // ══════════════════════════════════════════════════════════
+  if (type === "save_settings") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, website_domain, key_domain, linkvertise_token, ad_steps, step1_link, step2_link } = body;
+    
+    if (!user_id || !website_domain || !key_domain || !linkvertise_token)
+      return json({ success: false, error: "Missing required fields" }, 400, request);
+
+    if (key_domain.length > 6)
+      return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    await env.DB.prepare(`
+      INSERT INTO user_settings (user_id, website_domain, key_domain, linkvertise_token, ad_steps, step1_link, step2_link, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        website_domain = excluded.website_domain,
+        key_domain = excluded.key_domain,
+        linkvertise_token = excluded.linkvertise_token,
+        ad_steps = excluded.ad_steps,
+        step1_link = excluded.step1_link,
+        step2_link = excluded.step2_link,
+        updated_at = excluded.updated_at
+    `).bind(user_id, website_domain, key_domain.toUpperCase(), linkvertise_token, ad_steps, step1_link, step2_link, now, now).run();
+
+    return json({ success: true, message: "Settings saved" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GET SETTINGS BY USER ID
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_settings") {
+    const userId = url.searchParams.get("user_id");
+    if (!userId) return json({ success: false, error: "Missing user_id" }, 400, request);
+
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
+      .bind(userId).first();
+
+    if (!settings)
+      return json({ success: false, error: "Settings not found" }, 404, request);
+
+    return json({ success: true, settings }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GET SETTINGS BY DOMAIN
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_settings_by_domain") {
+    const domain = url.searchParams.get("domain");
+    if (!domain) return json({ success: false, error: "Missing domain" }, 400, request);
+
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    if (!settings)
+      return json({ success: false, error: "Settings not found" }, 404, request);
+
+    return json({ success: true, settings }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // COMPLETE STEP
+  // ══════════════════════════════════════════════════════════
+  if (type === "complete_step") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { hwid, step } = body;
+    if (!hwid || !step) return json({ success: false, error: "Missing params" }, 400, request);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Get or create progress
+    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    
+    if (!progress) {
+      await env.DB.prepare(
+        "INSERT INTO progress (hwid, ostime, step1, step2, created_at) VALUES (?, ?, 0, 0, ?)"
+      ).bind(hwid, now, now).run();
+    }
+
+    // Update step
+    if (step === 1) {
+      await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
+    } else if (step === 2) {
+      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
+    }
+
+    return json({ success: true, message: `Step ${step} completed` }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CREATE KEY
+  // ══════════════════════════════════════════════════════════
+  if (type === "create_key") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { hwid, domain, key_prefix } = body;
+    if (!hwid || !domain || !key_prefix) 
+      return json({ success: false, error: "Missing params" }, 400, request);
+
+    // Check if all steps completed
+    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    if (!progress || !settings)
+      return json({ success: false, error: "Progress or settings not found" }, 404, request);
+
+    if (!progress.step1)
+      return json({ success: false, error: "Step 1 not completed" }, 403, request);
+
+    if (settings.ad_steps === 2 && !progress.step2)
+      return json({ success: false, error: "Step 2 not completed" }, 403, request);
+
+    // Generate key
+    const now = Math.floor(Date.now() / 1000);
+    const keyId = Math.random().toString().slice(2, 9);
+    const key = `${key_prefix.toUpperCase()}_${keyId}`;
+
+    // Save to KV
+    if (!env["ntt-system"]) 
+      return json({ success: false, error: "KV not bound" }, 500, request);
+
+    await env["ntt-system"].put(`Key/${hwid}`, key, { 
+      expirationTtl: 86400, 
+      metadata: { created: now, domain } 
+    });
+
+    // Update total keys count
+    await env.DB.prepare(
+      "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
+    ).bind(domain).run();
+
+    // Clean up progress
+    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+
+    const updatedSettings = await env.DB.prepare("SELECT total_keys FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    return json({ 
+      success: true, 
+      key, 
+      expires_in: 86400,
+      total_keys: updatedSettings?.total_keys || 1
+    }, request);
   }
 
   return json({ status: false, error: "invalid_type" }, 400, request);
