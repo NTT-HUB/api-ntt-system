@@ -3,10 +3,9 @@
 // ============================================================
 
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
+const MIN_FLOW_SECONDS  = 25;
 const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi"; // ← link start của hệ thống
 
-const MIN_FLOW_SECONDS  = 25;
-const MIN_STEP2_SECONDS = 15;
 // WEBHOOK_URL đã bị xóa — chỉ dùng webhook của từng user
 const SESSION_TTL = 2 * 60 * 60;
 const IP_WINDOW   = 24 * 60 * 60;
@@ -278,12 +277,6 @@ async function handleRequest(request, env, ctx) {
     if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
     if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
 
-    const elapsed = Math.floor(Date.now() / 1000) - row.created_at;
-    if (elapsed < MIN_STEP2_SECONDS) {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-      return json({ status: false, error: "bypass_detected" }, 403, request);
-    }
-
     const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
     const valid = await checkLinkvertiseHash(hash, token, ua);
     if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
@@ -306,15 +299,15 @@ async function handleRequest(request, env, ctx) {
     if (!row.step2) return json({ status: false, error: "step2_not_done" }, 403, request);
 
     const now     = Math.floor(Date.now() / 1000);
+    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    const valid = await checkLinkvertiseHash(hash, token, ua);
+    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
+
     const elapsed = now - row.created_at;
     if (elapsed < MIN_FLOW_SECONDS) {
       await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
       return json({ status: false, error: "bypass_detected" }, 403, request);
     }
-
-    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    const valid = await checkLinkvertiseHash(hash, token, ua);
-    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
 
     if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
 
