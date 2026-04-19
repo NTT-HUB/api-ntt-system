@@ -33,3 +33,24 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+-- User settings table
+CREATE TABLE IF NOT EXISTS user_settings (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL UNIQUE,
+  website_domain  TEXT    NOT NULL,
+  key_domain      TEXT    DEFAULT 'KEY',
+  encode_key      TEXT    DEFAULT 'ntt-hub',
+  linkvertise_token TEXT  NOT NULL,
+  discord_webhook TEXT,
+  ad_steps        INTEGER DEFAULT 1,
+  step1_link      TEXT,
+  step2_link      TEXT,
+  total_keys      INTEGER DEFAULT 0,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id);
+CREATE INDEX IF NOT EXISTS idx_settings_domain ON user_settings(website_domain);
