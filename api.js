@@ -17,13 +17,14 @@ const ALLOWED_ORIGINS = [
   "https://www.ntt-hub.xyz",
   "https://ntt-system.pages.dev",
   "https://ntt-system.xyz",
- "https://www.ntt-system.xyz",
+  "https://www.ntt-system.xyz",
+  "null",
 ];
-
 
 function getCors(request) {
   const origin  = request?.headers?.get("Origin") || "";
-  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : "https://ntt-hub.xyz";
+  // Nếu không có origin (truy cập trực tiếp) hoặc origin trong whitelist thì cho qua
+  const allowed = (!origin || ALLOWED_ORIGINS.includes(origin)) ? (origin || "*") : "https://ntt-hub.xyz";
   return {
     "Access-Control-Allow-Origin":  allowed,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
