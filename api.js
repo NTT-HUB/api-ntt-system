@@ -17,7 +17,7 @@ const ALLOWED_ORIGINS = [
   "https://www.ntt-hub.xyz",
   "https://ntt-system.pages.dev",
   "https://ntt-system.xyz",
-  "null",
+ "https://www.ntt-system.xyz",
 ];
 
 function getCors(request) {
