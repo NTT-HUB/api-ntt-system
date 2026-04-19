@@ -238,8 +238,8 @@ async function handleRequest(request, env, ctx) {
     } catch {}
 
     await env.DB.prepare(
-      `INSERT INTO progress (hwid, ostime, step1, step2, created_at) VALUES (?, ?, 0, 0, ?)
-       ON CONFLICT(hwid) DO UPDATE SET ostime=excluded.ostime, step1=0, step2=0, created_at=excluded.created_at`
+      `INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)
+       ON CONFLICT(hwid) DO UPDATE SET ostime=excluded.ostime, start=0, step1=0, step2=0, created_at=excluded.created_at`
     ).bind(hwid, ostime, now).run();
 
     return json({ status: true, message: "initialized" }, request);
@@ -341,7 +341,7 @@ async function handleRequest(request, env, ctx) {
     const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
     if (!row) return json({ status: false, error: "not_found" }, 404, request);
 
-    return json({ status: true, hwid: row.hwid, step1: !!row.step1, step2: !!row.step2 }, request);
+    return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
   }
 
   // ══════════════════════════════════════════════════════════
@@ -410,9 +410,9 @@ async function handleRequest(request, env, ctx) {
     if (!username || !email || !password) 
       return json({ success: false, error: "All fields required" }, 400, request);
     
-    // Validate username: only alphanumeric and underscore
-    if (!/^[a-zA-Z0-9_]+$/.test(username))
-      return json({ success: false, error: "Username can only contain letters, numbers, and underscores" }, 400, request);
+    // Validate username: letters, numbers, underscore, and spaces only
+    if (!/^[a-zA-Z0-9_ ]+$/.test(username))
+      return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
     
     if (username.length < 3 || username.length > 15) 
       return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
@@ -506,7 +506,7 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link } = body;
+    const { user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, start_link, step1_link, step2_link } = body;
     
     if (!user_id || !website_domain || !linkvertise_token)
       return json({ success: false, error: "Missing required fields" }, 400, request);
@@ -519,8 +519,8 @@ async function handleRequest(request, env, ctx) {
     const finalEncodeKey = encode_key || 'ntt-hub';
 
     await env.DB.prepare(`
-      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, start_link, step1_link, step2_link, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
         website_domain = excluded.website_domain,
         key_domain = excluded.key_domain,
@@ -528,10 +528,11 @@ async function handleRequest(request, env, ctx) {
         linkvertise_token = excluded.linkvertise_token,
         discord_webhook = excluded.discord_webhook,
         ad_steps = excluded.ad_steps,
+        start_link = excluded.start_link,
         step1_link = excluded.step1_link,
         step2_link = excluded.step2_link,
         updated_at = excluded.updated_at
-    `).bind(user_id, website_domain, finalKeyDomain, finalEncodeKey, linkvertise_token, discord_webhook || '', ad_steps, step1_link, step2_link, now, now).run();
+    `).bind(user_id, website_domain, finalKeyDomain, finalEncodeKey, linkvertise_token, discord_webhook || '', ad_steps, start_link || '', step1_link, step2_link, now, now).run();
 
     return json({ success: true, message: "Settings saved" }, request);
   }
@@ -576,7 +577,7 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, step } = body;
+    const { hwid, step, hash } = body;
     if (!hwid || !step) return json({ success: false, error: "Missing params" }, 400, request);
 
     const now = Math.floor(Date.now() / 1000);
@@ -586,12 +587,14 @@ async function handleRequest(request, env, ctx) {
     
     if (!progress) {
       await env.DB.prepare(
-        "INSERT INTO progress (hwid, ostime, step1, step2, created_at) VALUES (?, ?, 0, 0, ?)"
+        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
       ).bind(hwid, now, now).run();
     }
 
     // Update step
-    if (step === 1) {
+    if (step === 'start') {
+      await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
+    } else if (step === 1) {
       await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 2) {
       await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
@@ -668,6 +671,78 @@ async function handleRequest(request, env, ctx) {
       expires_in: 86400,
       total_keys: updatedSettings?.total_keys || 1
     }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CHANGE USERNAME
+  // ══════════════════════════════════════════════════════════
+  if (type === "change_username") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, new_username } = body;
+    if (!user_id || !new_username)
+      return json({ success: false, error: "Missing parameters" }, 400, request);
+
+    if (!/^[a-zA-Z0-9_ ]+$/.test(new_username))
+      return json({ success: false, error: "Username can only contain letters, numbers, spaces, and underscores" }, 400, request);
+
+    if (new_username.length < 3 || new_username.length > 15)
+      return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
+
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? AND id != ?")
+      .bind(new_username, user_id).first();
+    if (existing)
+      return json({ success: false, error: "Username already taken" }, 409, request);
+
+    await env.DB.prepare("UPDATE users SET username = ? WHERE id = ?")
+      .bind(new_username, user_id).run();
+
+    return json({ success: true, message: "Username updated" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // CHANGE PASSWORD
+  // ══════════════════════════════════════════════════════════
+  if (type === "change_password") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, current_password, new_password } = body;
+    if (!user_id || !current_password || !new_password)
+      return json({ success: false, error: "Missing parameters" }, 400, request);
+
+    if (new_password.length < 6 || new_password.length > 20)
+      return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
+
+    const user = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
+      .bind(user_id).first();
+    if (!user)
+      return json({ success: false, error: "User not found" }, 404, request);
+
+    const hashedCurrent = await hashPassword(current_password);
+    if (hashedCurrent !== user.password)
+      return json({ success: false, error: "Current password is incorrect" }, 401, request);
+
+    const hashedNew = await hashPassword(new_password);
+    await env.DB.prepare("UPDATE users SET password = ? WHERE id = ?")
+      .bind(hashedNew, user_id).run();
+
+    return json({ success: true, message: "Password updated" }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // GET SYSTEM TOTAL KEYS
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_system_total") {
+    try {
+      const result = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
+      return json({ success: true, total: result?.total || 0 }, request);
+    } catch (error) {
+      return json({ success: true, total: 0 }, request);
+    }
   }
 
   return json({ status: false, error: "invalid_type" }, 400, request);
