@@ -3,7 +3,7 @@
 // ============================================================
 
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
-const SYSTEM_START_LINK = "https://linkvertise.com/1292597/ntt-start/1"; // ← link start của hệ thống
+const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi"; // ← link start của hệ thống
 
 const MIN_FLOW_SECONDS  = 25;
 const MIN_STEP2_SECONDS = 15;
