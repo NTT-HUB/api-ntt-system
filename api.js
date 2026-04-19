@@ -1,17 +1,11 @@
-// ============================================================
-// NTT HUB - Combined Worker
-// ============================================================
-
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
 const MIN_FLOW_SECONDS  = 25;
 const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi"; // ← link start của hệ thống
 
-// WEBHOOK_URL đã bị xóa — chỉ dùng webhook của từng user
 const SESSION_TTL = 2 * 60 * 60;
 const IP_WINDOW   = 24 * 60 * 60;
 const IP_MAX_HWID = 20;
 
-// ── helpers ──────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "https://ntt-hub.xyz",
   "https://www.ntt-hub.xyz",
@@ -23,7 +17,7 @@ const ALLOWED_ORIGINS = [
 
 function getCors(request) {
   const origin  = request?.headers?.get("Origin") || "";
-  // Nếu không có origin (truy cập trực tiếp) hoặc origin trong whitelist thì cho qua
+
   const allowed = (!origin || ALLOWED_ORIGINS.includes(origin)) ? (origin || "*") : "https://ntt-hub.xyz";
   return {
     "Access-Control-Allow-Origin":  allowed,
@@ -56,7 +50,7 @@ function normalizeHwid(url) {
   if (!raw) return null;
   try {
     const decoded = decodeURIComponent(raw).replace(/ /g, "+");
-    return decoded.length > 50 ? null : decoded; // giới hạn 50 ký tự
+    return decoded.length > 50 ? null : decoded;
   }
   catch { 
     const h = raw.replace(/ /g, "+");
@@ -76,7 +70,6 @@ async function checkLinkvertiseHash(hash, token, userAgent) {
   } catch { return false; }
 }
 
-// ── encode helpers ────────────────────────────────────────────
 function simpleHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -110,7 +103,6 @@ function encodeData(plaintext, baseKey) {
   return timeEncoded + "|" + t + "|" + encodedStr;
 }
 
-// ── Discord webhook — chỉ dùng webhook của user ──────────────
 async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
   if (!webhookUrl) return;
 
@@ -135,9 +127,8 @@ async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
   } catch {}
 }
 
-// ── Auth helpers ──────────────────────────────────────────────
 const JWT_SECRET = "ntt-hub-jwt-secret-change-this";
-const SESSION_DURATION = 7 * 24 * 60 * 60; // 7 days
+const SESSION_DURATION = 7 * 24 * 60 * 60;
 
 async function hashPassword(password) {
   const encoder = new TextEncoder();
@@ -172,7 +163,6 @@ async function verifyToken(token) {
   }
 }
 
-// ── main handler ──────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
     try { return await handleRequest(request, env, ctx); }
@@ -194,9 +184,6 @@ async function handleRequest(request, env, ctx) {
     return new Response(null, { status: 200, headers: getCors(request) });
   }
 
-  // ══════════════════════════════════════════════════════════
-  // INIT
-  // ══════════════════════════════════════════════════════════
   if (type === "init") {
     let hwid, ostime;
     try {
@@ -254,9 +241,6 @@ async function handleRequest(request, env, ctx) {
     return json({ status: true, message: "initialized" }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // STEP 1
-  // ══════════════════════════════════════════════════════════
   if (type === "step1") {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
@@ -268,9 +252,6 @@ async function handleRequest(request, env, ctx) {
     return json({ status: true, step1: true }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // STEP 2
-  // ══════════════════════════════════════════════════════════
   if (type === "step2") {
     const hwid = normalizeHwid(url);
     const hash = url.searchParams.get("hash");
@@ -288,9 +269,6 @@ async function handleRequest(request, env, ctx) {
     return json({ status: true, step2: true }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // STEP 3
-  // ══════════════════════════════════════════════════════════
   if (type === "step3") {
     const hwid = normalizeHwid(url);
     const hash = url.searchParams.get("hash");
@@ -325,23 +303,17 @@ async function handleRequest(request, env, ctx) {
     return json({ status: true, key, expires_in: 86400 }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // PROGRESS
-  // ══════════════════════════════════════════════════════════
   if (type === "progress") {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
 
     const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    // Trả 200 luôn, status=false khi chưa có session — client tự hiện nút Start
+
     if (!row) return json({ status: false, start: false, step1: false, step2: false }, 200, request);
 
     return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // DATA — Roblox check key
-  // ══════════════════════════════════════════════════════════
   if (type === "data") {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
@@ -372,9 +344,6 @@ async function handleRequest(request, env, ctx) {
     return text(encoded, 200, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // READ — Đọc key theo hwid
-  // ══════════════════════════════════════════════════════════
   if (type === "read") {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
@@ -390,9 +359,6 @@ async function handleRequest(request, env, ctx) {
     return json({ status: "success", hwid, key: result.value, left }, 200, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // GET START LINK — Trả về link start của hệ thống
-  // ══════════════════════════════════════════════════════════
   if (type === "get_start_link") {
     return json({
       success: true,
@@ -400,9 +366,6 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // AUTH: REGISTER
-  // ══════════════════════════════════════════════════════════
   if (type === "register") {
     let body;
     try { body = await request.json(); }
@@ -432,7 +395,6 @@ async function handleRequest(request, env, ctx) {
       "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?) RETURNING id"
     ).bind(username, email, hashedPassword, now).first();
 
-    // Tự động tạo settings mặc định cho user mới
     const defaultDomain = username.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g, '').slice(0, 15);
     await env.DB.prepare(`
       INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
@@ -450,9 +412,6 @@ async function handleRequest(request, env, ctx) {
     }, 201, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // AUTH: LOGIN
-  // ══════════════════════════════════════════════════════════
   if (type === "login") {
     let body;
     try { body = await request.json(); }
@@ -481,9 +440,6 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // AUTH: VERIFY
-  // ══════════════════════════════════════════════════════════
   if (type === "verify") {
     const authHeader = request.headers.get("Authorization");
     if (!authHeader || !authHeader.startsWith("Bearer "))
@@ -507,9 +463,6 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // SAVE SETTINGS — không có start_link nữa
-  // ══════════════════════════════════════════════════════════
   if (type === "save_settings") {
     let body;
     try { body = await request.json(); }
@@ -524,7 +477,6 @@ async function handleRequest(request, env, ctx) {
     if (!user_id || !website_domain)
       return json({ success: false, error: "Missing required fields" }, 400, request);
 
-    // Sanitize domain: space → dash, chỉ giữ chữ/số/dash, lowercase, tối đa 15 ký tự
     const finalDomain = website_domain
       .trim()
       .toLowerCase()
@@ -542,7 +494,6 @@ async function handleRequest(request, env, ctx) {
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
 
-    // Lấy existing để không ghi đè các field không được gửi lên bằng null/undefined
     const existing = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
       .bind(user_id).first();
 
@@ -575,9 +526,6 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, message: "Settings saved", website_domain: finalDomain }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // GET SETTINGS BY USER ID
-  // ══════════════════════════════════════════════════════════
   if (type === "get_settings") {
     const userId = url.searchParams.get("user_id");
     if (!userId) return json({ success: false, error: "Missing user_id" }, 400, request);
@@ -591,9 +539,6 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, settings }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // GET SETTINGS BY DOMAIN — thêm start_link hệ thống vào response
-  // ══════════════════════════════════════════════════════════
   if (type === "get_settings_by_domain") {
     const domain = url.searchParams.get("domain");
     if (!domain) return json({ success: false, error: "Missing domain" }, 400, request);
@@ -604,7 +549,6 @@ async function handleRequest(request, env, ctx) {
     if (!settings)
       return json({ success: false, error: "Settings not found" }, 404, request);
 
-    // Luôn dùng start_link của hệ thống, không dùng start_link của user
     return json({
       success: true,
       settings: {
@@ -614,9 +558,6 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // COMPLETE STEP
-  // ══════════════════════════════════════════════════════════
   if (type === "complete_step") {
     let body;
     try { body = await request.json(); }
@@ -626,10 +567,8 @@ async function handleRequest(request, env, ctx) {
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
-    // Bắt buộc có hash
     if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
 
-    // Lấy token của user (theo domain), không dùng token admin
     const userSettings = await env.DB.prepare(
       "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
     ).bind(domain).first();
@@ -637,7 +576,6 @@ async function handleRequest(request, env, ctx) {
     if (!userSettings?.linkvertise_token)
       return json({ success: false, error: "domain_not_found" }, 404, request);
 
-    // Verify hash với token của user
     const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
     if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
 
@@ -654,7 +592,7 @@ async function handleRequest(request, env, ctx) {
     if (step === "start") {
       await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 1) {
-      // Mark start=1 luôn khi step1 done (trong trường hợp 1 step, start và step1 gộp chung)
+
       await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 2) {
       await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
@@ -663,9 +601,6 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, message: `Step ${step} completed` }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CREATE KEY
-  // ══════════════════════════════════════════════════════════
   if (type === "create_key") {
     let body;
     try { body = await request.json(); }
@@ -683,7 +618,6 @@ async function handleRequest(request, env, ctx) {
     if (!settings)
       return json({ success: false, error: "Settings not found" }, 404, request);
 
-    // Không có progress = chưa hoàn thành bất kỳ step nào
     if (!progress)
       return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
 
@@ -722,7 +656,6 @@ async function handleRequest(request, env, ctx) {
       if (tr) hwidsToday = JSON.parse(tr.hwids).length;
     } catch {}
 
-    // Chỉ gửi webhook của user, không còn webhook hệ thống
     if (updatedSettings?.discord_webhook) {
       ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
     }
@@ -735,9 +668,6 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CHANGE USERNAME
-  // ══════════════════════════════════════════════════════════
   if (type === "change_username") {
     let body;
     try { body = await request.json(); }
@@ -753,7 +683,6 @@ async function handleRequest(request, env, ctx) {
     if (new_username.length < 3 || new_username.length > 15)
       return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
 
-    // Verify password trước khi đổi tên
     const userCheck = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
       .bind(user_id).first();
     if (!userCheck) return json({ success: false, error: "User not found" }, 404, request);
@@ -772,9 +701,6 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, message: "Username updated" }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // CHANGE PASSWORD
-  // ══════════════════════════════════════════════════════════
   if (type === "change_password") {
     let body;
     try { body = await request.json(); }
@@ -803,9 +729,6 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, message: "Password updated" }, request);
   }
 
-  // ══════════════════════════════════════════════════════════
-  // GET SYSTEM TOTAL KEYS
-  // ══════════════════════════════════════════════════════════
   if (type === "get_system_total") {
     try {
       const result = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
@@ -815,9 +738,6 @@ async function handleRequest(request, env, ctx) {
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // GET STATS — tổng key + số user (public)
-  // ══════════════════════════════════════════════════════════
   if (type === "get_stats") {
     try {
       const keysRow  = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
