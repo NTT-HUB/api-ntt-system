@@ -510,8 +510,19 @@ async function handleRequest(request, env, ctx) {
       step1_link, step2_link,
     } = body;
 
-    if (!user_id || !website_domain || !linkvertise_token)
+    if (!user_id || !website_domain)
       return json({ success: false, error: "Missing required fields" }, 400, request);
+
+    // Sanitize domain: space → dash, chỉ giữ chữ/số/dash, lowercase, tối đa 15 ký tự
+    const finalDomain = website_domain
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9\-]/g, "")
+      .slice(0, 15);
+
+    if (!finalDomain)
+      return json({ success: false, error: "Invalid website domain" }, 400, request);
 
     const finalKeyDomain = (key_domain || "KEY").toUpperCase();
     if (finalKeyDomain.length > 6)
@@ -519,6 +530,16 @@ async function handleRequest(request, env, ctx) {
 
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
+
+    // Lấy existing để không ghi đè các field không được gửi lên bằng null/undefined
+    const existing = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
+      .bind(user_id).first();
+
+    const finalToken   = linkvertise_token !== undefined ? linkvertise_token : (existing?.linkvertise_token || "");
+    const finalWebhook = discord_webhook   !== undefined ? discord_webhook   : (existing?.discord_webhook   || "");
+    const finalSteps   = ad_steps          !== undefined ? ad_steps          : (existing?.ad_steps          || 1);
+    const finalStep1   = step1_link        !== undefined ? step1_link        : (existing?.step1_link        || "");
+    const finalStep2   = step2_link        !== undefined ? step2_link        : (existing?.step2_link        || "");
 
     await env.DB.prepare(`
       INSERT INTO user_settings
@@ -535,12 +556,12 @@ async function handleRequest(request, env, ctx) {
         step2_link        = excluded.step2_link,
         updated_at        = excluded.updated_at
     `).bind(
-      user_id, website_domain, finalKeyDomain, finalEncodeKey,
-      linkvertise_token, discord_webhook || "", ad_steps,
-      step1_link, step2_link, now, now,
+      user_id, finalDomain, finalKeyDomain, finalEncodeKey,
+      finalToken, finalWebhook, finalSteps,
+      finalStep1, finalStep2, now, now,
     ).run();
 
-    return json({ success: true, message: "Settings saved" }, request);
+    return json({ success: true, message: "Settings saved", website_domain: finalDomain }, request);
   }
 
   // ══════════════════════════════════════════════════════════
