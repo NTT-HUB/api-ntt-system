@@ -409,6 +409,11 @@ async function handleRequest(request, env, ctx) {
     const { username, email, password } = body;
     if (!username || !email || !password) 
       return json({ success: false, error: "All fields required" }, 400, request);
+    
+    // Validate username: only alphanumeric and underscore
+    if (!/^[a-zA-Z0-9_]+$/.test(username))
+      return json({ success: false, error: "Username can only contain letters, numbers, and underscores" }, 400, request);
+    
     if (username.length < 3 || username.length > 15) 
       return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
     if (password.length < 6 || password.length > 20) 
