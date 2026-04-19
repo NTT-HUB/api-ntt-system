@@ -103,24 +103,26 @@ function encodeData(plaintext, baseKey) {
 }
 
 // ── Discord webhook ──────────────────────────────────────────
-async function sendWebhook(webhookUrl, { hwid, key, ip, hwidsToday }) {
+async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
+  if (!webhookUrl) return;
+  
   const embed = {
-    title:  "New Key Generated",
-    color:  0x44ff88,
+    title: "New Key Generated",
+    color: 0x00ff9d,
     fields: [
-      { name: "HWID",                  value: `\`${hwid}\``,   inline: false },
-      { name: "Key",                   value: `\`${key}\``,    inline: false },
-      { name: "IP Address",            value: `\`${ip}\``,     inline: true  },
-      { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true  },
+      { name: "HWID", value: `\`${hwid}\``, inline: false },
+      { name: "Key", value: `\`${key}\``, inline: false },
+      { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true },
     ],
-    footer:    { text: "NTT HUB Key System" },
+    footer: { text: "NTT System" },
     timestamp: new Date().toISOString(),
   };
+  
   try {
     await fetch(webhookUrl, {
-      method:  "POST",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ embeds: [embed] }),
+      body: JSON.stringify({ embeds: [embed] }),
     });
   } catch {}
 }
@@ -357,10 +359,20 @@ async function handleRequest(request, env, ctx) {
 
     const key     = result.value;
     const created = result.metadata?.created;
+    const domain  = result.metadata?.domain;
     const now     = Math.floor(Date.now() / 1000);
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
 
-    const baseKey = env.ENCODE_KEY || ENCODE_KEY;
+    let baseKey = env.ENCODE_KEY || ENCODE_KEY;
+    
+    if (domain) {
+      const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
+        .bind(domain).first();
+      if (settings && settings.encode_key) {
+        baseKey = settings.encode_key;
+      }
+    }
+
     const payload = key + "|" + left;
     const encoded = encodeData(payload, baseKey);
 
@@ -397,10 +409,10 @@ async function handleRequest(request, env, ctx) {
     const { username, email, password } = body;
     if (!username || !email || !password) 
       return json({ success: false, error: "All fields required" }, 400, request);
-    if (username.length < 3) 
-      return json({ success: false, error: "Username must be 3+ chars" }, 400, request);
-    if (password.length < 6) 
-      return json({ success: false, error: "Password must be 6+ chars" }, 400, request);
+    if (username.length < 3 || username.length > 15) 
+      return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
+    if (password.length < 6 || password.length > 20) 
+      return json({ success: false, error: "Password must be 6-20 chars" }, 400, request);
 
     const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? OR email = ?")
       .bind(username, email).first();
@@ -489,28 +501,32 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { user_id, website_domain, key_domain, linkvertise_token, ad_steps, step1_link, step2_link } = body;
+    const { user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link } = body;
     
-    if (!user_id || !website_domain || !key_domain || !linkvertise_token)
+    if (!user_id || !website_domain || !linkvertise_token)
       return json({ success: false, error: "Missing required fields" }, 400, request);
 
-    if (key_domain.length > 6)
+    const finalKeyDomain = (key_domain || 'KEY').toUpperCase();
+    if (finalKeyDomain.length > 6)
       return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
 
     const now = Math.floor(Date.now() / 1000);
+    const finalEncodeKey = encode_key || 'ntt-hub';
 
     await env.DB.prepare(`
-      INSERT INTO user_settings (user_id, website_domain, key_domain, linkvertise_token, ad_steps, step1_link, step2_link, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
         website_domain = excluded.website_domain,
         key_domain = excluded.key_domain,
+        encode_key = excluded.encode_key,
         linkvertise_token = excluded.linkvertise_token,
+        discord_webhook = excluded.discord_webhook,
         ad_steps = excluded.ad_steps,
         step1_link = excluded.step1_link,
         step2_link = excluded.step2_link,
         updated_at = excluded.updated_at
-    `).bind(user_id, website_domain, key_domain.toUpperCase(), linkvertise_token, ad_steps, step1_link, step2_link, now, now).run();
+    `).bind(user_id, website_domain, finalKeyDomain, finalEncodeKey, linkvertise_token, discord_webhook || '', ad_steps, step1_link, step2_link, now, now).run();
 
     return json({ success: true, message: "Settings saved" }, request);
   }
@@ -627,8 +643,19 @@ async function handleRequest(request, env, ctx) {
     // Clean up progress
     await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
 
-    const updatedSettings = await env.DB.prepare("SELECT total_keys FROM user_settings WHERE website_domain = ?")
+    const updatedSettings = await env.DB.prepare("SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?")
       .bind(domain).first();
+
+    let hwidsToday = 1;
+    try {
+      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?")
+        .bind(request.headers.get("CF-Connecting-IP") || "unknown").first();
+      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
+    } catch {}
+
+    if (updatedSettings?.discord_webhook) {
+      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
+    }
 
     return json({ 
       success: true, 
