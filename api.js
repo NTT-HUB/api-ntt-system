@@ -292,9 +292,10 @@ async function handleRequest(request, env, ctx) {
 
     if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
 
+    const step3Domain = url.searchParams.get("domain") || "";
     const key = "KEY_" + Math.random().toString().slice(2, 12);
     try {
-      await env["ntt-system"].put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
+      await env["ntt-system"].put(`${step3Domain || "default"}/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now, domain: step3Domain } });
     } catch (kvErr) {
       return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
     }
@@ -319,14 +320,16 @@ async function handleRequest(request, env, ctx) {
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
     if (!env["ntt-system"]) return json({ status: false, error: "data_not_bound" }, 500, request);
 
-    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
+    const result = await env["ntt-system"].getWithMetadata(`${url.searchParams.get("domain") || "default"}/${hwid}`);
     if (!result?.value) return json({ status: false, error: "key_not_found" }, 404, request);
 
     const key     = result.value;
     const created = result.metadata?.created;
-    const domain  = result.metadata?.domain;
     const now     = Math.floor(Date.now() / 1000);
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
+
+    // Ưu tiên domain từ query param, fallback metadata
+    const domain = url.searchParams.get("domain") || result.metadata?.domain || "";
 
     let baseKey = env.ENCODE_KEY || "ntt-hub";
 
@@ -348,7 +351,9 @@ async function handleRequest(request, env, ctx) {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
 
-    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
+    const readDomain = url.searchParams.get("domain") || "";
+    const kvKey = readDomain ? `${readDomain}/${hwid}` : `Key/${hwid}`;
+    const result = await env["ntt-system"].getWithMetadata(kvKey);
     if (!result?.value)
       return json({ status: "error", message: "Key not found or expired" }, 404, request);
 
@@ -634,7 +639,7 @@ async function handleRequest(request, env, ctx) {
     if (!env["ntt-system"])
       return json({ success: false, error: "KV not bound" }, 500, request);
 
-    await env["ntt-system"].put(`Key/${hwid}`, key, {
+    await env["ntt-system"].put(`${domain}/${hwid}`, key, {
       expirationTtl: 86400,
       metadata: { created: now, domain },
     });
