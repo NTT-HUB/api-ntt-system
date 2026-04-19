@@ -20,6 +20,7 @@ const ALLOWED_ORIGINS = [
  "https://www.ntt-system.xyz",
 ];
 
+
 function getCors(request) {
   const origin  = request?.headers?.get("Origin") || "";
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : "https://ntt-hub.xyz";
@@ -429,6 +430,14 @@ async function handleRequest(request, env, ctx) {
     const result = await env.DB.prepare(
       "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?) RETURNING id"
     ).bind(username, email, hashedPassword, now).first();
+
+    // Tự động tạo settings mặc định cho user mới
+    const defaultDomain = username.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g, '').slice(0, 15);
+    await env.DB.prepare(`
+      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
+      VALUES (?, ?, 'KEY', 'ntt-hub', '', '', 1, '', '', ?, ?)
+      ON CONFLICT(user_id) DO NOTHING
+    `).bind(result.id, defaultDomain, now, now).run();
 
     const token = await generateToken(result.id, username);
 
