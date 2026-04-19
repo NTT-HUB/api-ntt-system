@@ -802,5 +802,22 @@ async function handleRequest(request, env, ctx) {
     }
   }
 
+  // ══════════════════════════════════════════════════════════
+  // GET STATS — tổng key + số user (public)
+  // ══════════════════════════════════════════════════════════
+  if (type === "get_stats") {
+    try {
+      const keysRow  = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
+      const usersRow = await env.DB.prepare("SELECT COUNT(*) as total FROM users").first();
+      return json({
+        success:    true,
+        total_keys: keysRow?.total  || 0,
+        total_users: usersRow?.total || 0,
+      }, request);
+    } catch {
+      return json({ success: true, total_keys: 0, total_users: 0 }, request);
+    }
+  }
+
   return json({ status: false, error: "invalid_type" }, 400, request);
 }
