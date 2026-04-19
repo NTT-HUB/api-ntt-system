@@ -2,7 +2,6 @@
 // NTT HUB - Combined Worker
 // ============================================================
 
-const ENCODE_KEY = "string.char"; // ← đổi key tại đây, phải khớp với Lua
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
 const SYSTEM_START_LINK = "https://linkvertise.com/1292597/ntt-start/1"; // ← link start của hệ thống
 
@@ -353,7 +352,7 @@ async function handleRequest(request, env, ctx) {
     const now     = Math.floor(Date.now() / 1000);
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
 
-    let baseKey = env.ENCODE_KEY || ENCODE_KEY;
+    let baseKey = env.ENCODE_KEY || "ntt-hub";
 
     if (domain) {
       const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
@@ -611,8 +610,23 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, step, hash } = body;
-    if (!hwid || !step) return json({ success: false, error: "Missing params" }, 400, request);
+    const { hwid, step, hash, domain } = body;
+    if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
+
+    // Bắt buộc có hash
+    if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
+
+    // Lấy token của user (theo domain), không dùng token admin
+    const userSettings = await env.DB.prepare(
+      "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
+    ).bind(domain).first();
+
+    if (!userSettings?.linkvertise_token)
+      return json({ success: false, error: "domain_not_found" }, 404, request);
+
+    // Verify hash với token của user
+    const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
+    if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
 
     const now = Math.floor(Date.now() / 1000);
 
