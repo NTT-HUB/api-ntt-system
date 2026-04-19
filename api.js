@@ -1,247 +1,351 @@
 // ============================================================
-// NTT HUB - Authentication System
+// NTT HUB - Combined Worker
 // ============================================================
 
+const ENCODE_KEY = "string.char"; // ← đổi key tại đây, phải khớp với Lua
+const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
+
+const MIN_FLOW_SECONDS  = 25;
+const MIN_STEP2_SECONDS = 15;
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1492190232110698617/R99ssaRboxvn2gt4vgZcB2p3tgafRNiXdX3yUcdi6jBjQxjXUEyBwtBLX3IXL6lc-5nd";
+const SESSION_TTL = 2 * 60 * 60;
+const IP_WINDOW   = 24 * 60 * 60;
+const IP_MAX_HWID = 20;
+
+// ── helpers ──────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "https://ntt-hub.xyz",
   "https://www.ntt-hub.xyz",
-  "http://localhost:3000",
   "null",
 ];
 
-const JWT_SECRET = "your-super-secret-jwt-key-change-this"; // Change this!
-const SESSION_TTL = 7 * 24 * 60 * 60; // 7 days
-
-// ── Helpers ──────────────────────────────────────────────────
 function getCors(request) {
-  const origin = request?.headers?.get("Origin") || "";
+  const origin  = request?.headers?.get("Origin") || "";
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : "https://ntt-hub.xyz";
   return {
-    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Origin":  allowed,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Headers": "Content-Type, User-Agent",
     "Vary": "Origin",
   };
 }
 
 function json(obj, status = 200, request = null) {
+  if (status && typeof status === "object" && status.headers) {
+    request = status;
+    status  = 200;
+  }
   return new Response(JSON.stringify(obj), {
     status,
     headers: { ...getCors(request), "Content-Type": "application/json" },
   });
 }
 
-// Simple hash function (use bcrypt in production!)
-async function hashPassword(password) {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + "salt-key"); // Add salt
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+function text(str, status = 200, request = null) {
+  return new Response(str, {
+    status,
+    headers: { ...getCors(request), "Content-Type": "text/plain" },
+  });
 }
 
-// Generate JWT token
-async function generateToken(userId, username) {
-  const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const payload = btoa(JSON.stringify({
-    userId,
-    username,
-    exp: Math.floor(Date.now() / 1000) + SESSION_TTL,
-  }));
-  const signature = await hashPassword(header + "." + payload + JWT_SECRET);
-  return `${header}.${payload}.${signature.substring(0, 43)}`;
+function normalizeHwid(url) {
+  const raw = url.search.match(/[?&]hwid=([^&]*)/)?.[1];
+  if (!raw) return null;
+  try { return decodeURIComponent(raw).replace(/ /g, "+"); }
+  catch { return raw.replace(/ /g, "+"); }
 }
 
-// Verify JWT token
-async function verifyToken(token) {
+async function checkLinkvertiseHash(hash, token, userAgent) {
+  const apiUrl = `https://publisher.linkvertise.com/api/v1/anti_bypassing?token=${token}&hash=${encodeURIComponent(hash)}`;
   try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    
-    const payload = JSON.parse(atob(parts[1]));
-    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-    
-    const expectedSig = await hashPassword(parts[0] + "." + parts[1] + JWT_SECRET);
-    if (!expectedSig.startsWith(parts[2])) return null;
-    
-    return payload;
-  } catch {
-    return null;
-  }
+    const res  = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": userAgent || "Cloudflare-Worker" },
+    });
+    const data = await res.json();
+    return data?.status === true;
+  } catch { return false; }
 }
 
-// ── Main Handler ─────────────────────────────────────────────
+// ── encode helpers (port từ Lua, đồng nhất với client) ───────
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 131 + str.charCodeAt(i)) % 4294967296; // 2^32
+  }
+  return hash;
+}
+
+function toHex(str) {
+  return [...str].map(c =>
+    c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()
+  ).join("");
+}
+
+function encodeData(plaintext, baseKey) {
+  const t = Math.floor(Date.now() / 1000);
+  const rawKey    = String(baseKey) + ":" + String(t);
+  const hashedKey = simpleHash(rawKey);
+
+  const result = [];
+  for (let i = 0; i < plaintext.length; i++) {
+    const byte = plaintext.charCodeAt(i);
+    const k    = (hashedKey + (i + 1) * 7) % 256; // Lua i bắt đầu từ 1
+    let encoded = (byte ^ k);
+    encoded = (encoded + k) % 256;
+    result.push(String.fromCharCode(encoded));
+  }
+
+  const encodedStr  = toHex(result.join(""));
+  const timeEncoded = Math.floor(simpleHash(String(t) + "salt")).toString();
+  return timeEncoded + "|" + t + "|" + encodedStr;
+}
+
+// ── Discord webhook ──────────────────────────────────────────
+async function sendWebhook(webhookUrl, { hwid, key, ip, hwidsToday }) {
+  const embed = {
+    title:  "New Key Generated",
+    color:  0x44ff88,
+    fields: [
+      { name: "HWID",                  value: `\`${hwid}\``,   inline: false },
+      { name: "Key",                   value: `\`${key}\``,    inline: false },
+      { name: "IP Address",            value: `\`${ip}\``,     inline: true  },
+      { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true  },
+    ],
+    footer:    { text: "NTT HUB Key System" },
+    timestamp: new Date().toISOString(),
+  };
+  try {
+    await fetch(webhookUrl, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ embeds: [embed] }),
+    });
+  } catch {}
+}
+
+// ── main handler ─────────────────────────────────────────────
 export default {
   async fetch(request, env, ctx) {
-    try {
-      return await handleRequest(request, env, ctx);
-    } catch (err) {
-      return json({ success: false, error: err.message }, 500, request);
+    try { return await handleRequest(request, env, ctx); }
+    catch (err) {
+      return new Response(JSON.stringify({ status: false, error: "internal_error", message: err?.message || "unknown" }), {
+        status:  500,
+        headers: { ...getCors(request), "Content-Type": "application/json" },
+      });
     }
   },
 };
 
 async function handleRequest(request, env, ctx) {
-  const url = new URL(request.url);
-  const path = url.pathname;
+  const url  = new URL(request.url);
+  const type = url.searchParams.get("type");
+  const ua   = request.headers.get("User-Agent") || "";
 
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: getCors(request) });
   }
 
   // ══════════════════════════════════════════════════════════
-  // REGISTER
+  // INIT
   // ══════════════════════════════════════════════════════════
-  if (path === "/auth/register" && request.method === "POST") {
-    let body;
+  if (type === "init") {
+    let hwid, ostime;
     try {
-      body = await request.json();
-    } catch {
-      return json({ success: false, error: "Invalid JSON" }, 400, request);
+      const body = await request.json();
+      hwid   = typeof body.hwid === "string" ? body.hwid.replace(/ /g, "+") : body.hwid;
+      ostime = body.ostime;
+    } catch { return json({ status: false, error: "invalid_body" }, 400, request); }
+
+    if (!hwid || !ostime) return json({ status: false, error: "missing_params" }, 400, request);
+
+    const now    = Math.floor(Date.now() / 1000);
+    const cutoff = now - SESSION_TTL;
+    const ip     = request.headers.get("CF-Connecting-IP") || "unknown";
+
+    const blRow = await env.DB.prepare("SELECT ip FROM ip_blacklist WHERE ip = ?").bind(ip).first();
+    if (blRow) return json({ status: false, error: "ip_blacklisted" }, 403, request);
+
+    let trackRow = await env.DB.prepare("SELECT hwids, first_seen FROM ip_tracking WHERE ip = ?").bind(ip).first();
+    let hwids      = [];
+    let first_seen = now;
+
+    if (trackRow) {
+      if (now - trackRow.first_seen > IP_WINDOW) {
+        await env.DB.prepare("DELETE FROM ip_tracking WHERE ip = ?").bind(ip).run();
+      } else {
+        try { hwids = JSON.parse(trackRow.hwids); } catch {}
+        first_seen = trackRow.first_seen;
+      }
     }
 
-    const { username, email, password } = body;
+    if (!hwids.includes(hwid)) hwids.push(hwid);
 
-    // Validation
-    if (!username || !email || !password) {
-      return json({ success: false, error: "All fields are required" }, 400, request);
+    if (hwids.length >= IP_MAX_HWID) {
+      await env.DB.prepare(
+        "INSERT INTO ip_blacklist (ip, banned_at, reason) VALUES (?, ?, ?) ON CONFLICT(ip) DO NOTHING"
+      ).bind(ip, now, "exceeded_hwid_limit").run();
+      return json({ status: false, error: "ip_blacklisted", reason: "exceeded_hwid_limit" }, 403, request);
     }
 
-    if (username.length < 3) {
-      return json({ success: false, error: "Username must be at least 3 characters" }, 400, request);
-    }
+    await env.DB.prepare(
+      `INSERT INTO ip_tracking (ip, hwids, first_seen) VALUES (?, ?, ?)
+       ON CONFLICT(ip) DO UPDATE SET hwids=excluded.hwids`
+    ).bind(ip, JSON.stringify(hwids), first_seen).run();
 
-    if (password.length < 6) {
-      return json({ success: false, error: "Password must be at least 6 characters" }, 400, request);
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return json({ success: false, error: "Invalid email format" }, 400, request);
-    }
-
-    // Check if user exists
-    const existingUser = await env.DB.prepare(
-      "SELECT id FROM users WHERE username = ? OR email = ?"
-    ).bind(username, email).first();
-
-    if (existingUser) {
-      return json({ success: false, error: "Username or email already exists" }, 409, request);
-    }
-
-    // Hash password
-    const hashedPassword = await hashPassword(password);
-    const now = Math.floor(Date.now() / 1000);
-
-    // Create user
-    const result = await env.DB.prepare(
-      `INSERT INTO users (username, email, password, created_at) 
-       VALUES (?, ?, ?, ?) RETURNING id`
-    ).bind(username, email, hashedPassword, now).first();
-
-    const token = await generateToken(result.id, username);
-
-    return json({
-      success: true,
-      message: "Account created successfully",
-      user: { id: result.id, username, email },
-      token,
-    }, 201, request);
-  }
-
-  // ══════════════════════════════════════════════════════════
-  // LOGIN
-  // ══════════════════════════════════════════════════════════
-  if (path === "/auth/login" && request.method === "POST") {
-    let body;
     try {
-      body = await request.json();
-    } catch {
-      return json({ success: false, error: "Invalid JSON" }, 400, request);
-    }
+      await env.DB.prepare("DELETE FROM progress WHERE hwid != ? AND created_at < ?").bind(hwid, cutoff).run();
+    } catch {}
 
-    const { username, password } = body;
+    await env.DB.prepare(
+      `INSERT INTO progress (hwid, ostime, step1, step2, created_at) VALUES (?, ?, 0, 0, ?)
+       ON CONFLICT(hwid) DO UPDATE SET ostime=excluded.ostime, step1=0, step2=0, created_at=excluded.created_at`
+    ).bind(hwid, ostime, now).run();
 
-    if (!username || !password) {
-      return json({ success: false, error: "Username and password are required" }, 400, request);
-    }
-
-    // Find user
-    const user = await env.DB.prepare(
-      "SELECT * FROM users WHERE username = ? OR email = ?"
-    ).bind(username, username).first();
-
-    if (!user) {
-      return json({ success: false, error: "Invalid credentials" }, 401, request);
-    }
-
-    // Verify password
-    const hashedInput = await hashPassword(password);
-    if (hashedInput !== user.password) {
-      return json({ success: false, error: "Invalid credentials" }, 401, request);
-    }
-
-    // Generate token
-    const token = await generateToken(user.id, user.username);
-
-    return json({
-      success: true,
-      message: "Login successful",
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-      },
-      token,
-    }, request);
+    return json({ status: true, message: "initialized" }, request);
   }
 
   // ══════════════════════════════════════════════════════════
-  // VERIFY TOKEN (Check if logged in)
+  // STEP 1
   // ══════════════════════════════════════════════════════════
-  if (path === "/auth/verify" && request.method === "GET") {
-    const authHeader = request.headers.get("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return json({ success: false, error: "No token provided" }, 401, request);
-    }
+  if (type === "step1") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
 
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
 
-    if (!payload) {
-      return json({ success: false, error: "Invalid or expired token" }, 401, request);
-    }
-
-    // Get user info
-    const user = await env.DB.prepare(
-      "SELECT id, username, email, created_at FROM users WHERE id = ?"
-    ).bind(payload.userId).first();
-
-    if (!user) {
-      return json({ success: false, error: "User not found" }, 404, request);
-    }
-
-    return json({
-      success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        created_at: user.created_at,
-      },
-    }, request);
+    await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
+    return json({ status: true, step1: true }, request);
   }
 
   // ══════════════════════════════════════════════════════════
-  // LOGOUT (client-side only, just invalidate token)
+  // STEP 2
   // ══════════════════════════════════════════════════════════
-  if (path === "/auth/logout" && request.method === "POST") {
-    return json({
-      success: true,
-      message: "Logged out successfully",
-    }, request);
+  if (type === "step2") {
+    const hwid = normalizeHwid(url);
+    const hash = url.searchParams.get("hash");
+    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
+    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
+
+    const elapsed = Math.floor(Date.now() / 1000) - row.created_at;
+    if (elapsed < MIN_STEP2_SECONDS) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      return json({ status: false, error: "bypass_detected" }, 403, request);
+    }
+
+    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    const valid = await checkLinkvertiseHash(hash, token, ua);
+    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
+
+    await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
+    return json({ status: true, step2: true }, request);
   }
 
-  return json({ success: false, error: "Not found" }, 404, request);
+  // ══════════════════════════════════════════════════════════
+  // STEP 3
+  // ══════════════════════════════════════════════════════════
+  if (type === "step3") {
+    const hwid = normalizeHwid(url);
+    const hash = url.searchParams.get("hash");
+    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
+    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
+    if (!row.step2) return json({ status: false, error: "step2_not_done" }, 403, request);
+
+    const now     = Math.floor(Date.now() / 1000);
+    const elapsed = now - row.created_at;
+    if (elapsed < MIN_FLOW_SECONDS) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      return json({ status: false, error: "bypass_detected" }, 403, request);
+    }
+
+    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    const valid = await checkLinkvertiseHash(hash, token, ua);
+    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
+
+    if (!env.NTT_SYSTEM) return json({ status: false, error: "kv_not_bound" }, 500, request);
+
+    const key = "KEY_" + Math.random().toString().slice(2, 12);
+    try {
+      await env.NTT_SYSTEM.put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
+    } catch (kvErr) {
+      return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
+    }
+
+    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+
+    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
+    let hwidsToday = 1;
+    try {
+      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?").bind(clientIp).first();
+      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
+    } catch {}
+
+    ctx.waitUntil(sendWebhook(env.WEBHOOK_URL || WEBHOOK_URL, { hwid, key, ip: clientIp, hwidsToday }));
+    return json({ status: true, key, expires_in: 86400 }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // PROGRESS
+  // ══════════════════════════════════════════════════════════
+  if (type === "progress") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
+
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    if (!row) return json({ status: false, error: "not_found" }, 404, request);
+
+    return json({ status: true, hwid: row.hwid, step1: !!row.step1, step2: !!row.step2 }, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // DATA — Roblox check key (trả về chuỗi encoded)
+  // GET /api?type=data&hwid=xxx
+  // ══════════════════════════════════════════════════════════
+  if (type === "data") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
+    if (!env.NTT_SYSTEM) return json({ status: false, error: "data_not_bound" }, 500, request);
+
+    const result = await env.NTT_SYSTEM.getWithMetadata(`Key/${hwid}`);
+    if (!result?.value) return json({ status: false, error: "key_not_found" }, 404, request);
+
+    const key     = result.value;
+    const created = result.metadata?.created;
+    const now     = Math.floor(Date.now() / 1000);
+    const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
+
+    const baseKey = env.ENCODE_KEY || ENCODE_KEY;
+    const payload = key + "|" + left;
+    const encoded = encodeData(payload, baseKey);
+
+    return text(encoded, 200, request);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // READ — Đọc key theo hwid
+  // GET /api?type=read&hwid=xxx
+  // ══════════════════════════════════════════════════════════
+  if (type === "read") {
+    const hwid = normalizeHwid(url);
+    if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
+
+    const result = await env.NTT_SYSTEM.getWithMetadata(`Key/${hwid}`);
+    if (!result?.value)
+      return json({ status: "error", message: "Key not found or expired" }, 404, request);
+
+    const now     = Math.floor(Date.now() / 1000);
+    const created = result.metadata?.created;
+    const left    = created ? Math.max(0, 86400 - (now - created)) : null;
+
+    return json({ status: "success", hwid, key: result.value, left }, 200, request);
+  }
+
+  return json({ status: false, error: "invalid_type" }, 400, request);
 }
