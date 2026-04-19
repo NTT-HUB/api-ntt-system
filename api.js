@@ -337,7 +337,8 @@ async function handleRequest(request, env, ctx) {
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
 
     const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "not_found" }, 404, request);
+    // Trả 200 luôn, status=false khi chưa có session — client tự hiện nút Start
+    if (!row) return json({ status: false, start: false, step1: false, step2: false }, 200, request);
 
     return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
   }
