@@ -499,6 +499,13 @@ async function handleRequest(request, env, ctx) {
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
 
+    // Check domain trùng với user khác
+    const domainTaken = await env.DB.prepare(
+      "SELECT user_id FROM user_settings WHERE website_domain = ? AND user_id != ?"
+    ).bind(finalDomain, user_id).first();
+    if (domainTaken)
+      return json({ success: false, error: "Domain already taken by another user" }, 409, request);
+
     const existing = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
       .bind(user_id).first();
 
