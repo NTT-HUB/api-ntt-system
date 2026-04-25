@@ -1,7 +1,12 @@
+// ============================================================
+// NTT HUB - Combined Worker
+// ============================================================
+
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
-const MIN_FLOW_SECONDS  = 25;
 const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi";
 
+const MIN_FLOW_SECONDS  = 25;
+const MIN_STEP2_SECONDS = 15;
 const SESSION_TTL = 2 * 60 * 60;
 const IP_WINDOW   = 24 * 60 * 60;
 const IP_MAX_HWID = 20;
@@ -10,14 +15,12 @@ const ALLOWED_ORIGINS = [
   "https://ntt-hub.xyz",
   "https://www.ntt-hub.xyz",
   "https://ntt-system.pages.dev",
-  "https://ntt-system.xyz",
-  "https://www.ntt-system.xyz",
   "null",
 ];
 
 function getCors(request) {
   const origin  = request?.headers?.get("Origin") || "";
-  const allowed = (!origin || ALLOWED_ORIGINS.includes(origin)) ? (origin || "*") : "https://ntt-hub.xyz";
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : "https://ntt-hub.xyz";
   return {
     "Access-Control-Allow-Origin":  allowed,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -104,7 +107,6 @@ function encodeData(plaintext, baseKey) {
 
 async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
   if (!webhookUrl) return;
-
   const embed = {
     title: "New Key Generated",
     color: 0x00ff9d,
@@ -116,7 +118,6 @@ async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
     footer: { text: "NTT System" },
     timestamp: new Date().toISOString(),
   };
-
   try {
     await fetch(webhookUrl, {
       method: "POST",
@@ -260,6 +261,12 @@ async function handleRequest(request, env, ctx) {
     if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
     if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
 
+    const elapsed = Math.floor(Date.now() / 1000) - row.created_at;
+    if (elapsed < MIN_STEP2_SECONDS) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      return json({ status: false, error: "bypass_detected" }, 403, request);
+    }
+
     const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
     const valid = await checkLinkvertiseHash(hash, token, ua);
     if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
@@ -279,22 +286,21 @@ async function handleRequest(request, env, ctx) {
     if (!row.step2) return json({ status: false, error: "step2_not_done" }, 403, request);
 
     const now     = Math.floor(Date.now() / 1000);
-    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    const valid = await checkLinkvertiseHash(hash, token, ua);
-    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
-
     const elapsed = now - row.created_at;
     if (elapsed < MIN_FLOW_SECONDS) {
       await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
       return json({ status: false, error: "bypass_detected" }, 403, request);
     }
 
+    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    const valid = await checkLinkvertiseHash(hash, token, ua);
+    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
+
     if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
 
-    const step3Domain = url.searchParams.get("domain") || "";
     const key = "KEY_" + Math.random().toString().slice(2, 12);
     try {
-      await env["ntt-system"].put(`${step3Domain || "default"}/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now, domain: step3Domain } });
+      await env["ntt-system"].put(`Key/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now } });
     } catch (kvErr) {
       return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
     }
@@ -308,7 +314,6 @@ async function handleRequest(request, env, ctx) {
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
 
     const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-
     if (!row) return json({ status: false, start: false, step1: false, step2: false }, 200, request);
 
     return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
@@ -319,29 +324,24 @@ async function handleRequest(request, env, ctx) {
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 404, request);
     if (!env["ntt-system"]) return json({ status: false, error: "data_not_bound" }, 500, request);
 
-    const result = await env["ntt-system"].getWithMetadata(`${url.searchParams.get("domain") || "default"}/${hwid}`);
+    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
     if (!result?.value) return json({ status: false, error: "key_not_found" }, 404, request);
 
     const key     = result.value;
     const created = result.metadata?.created;
+    const domain  = result.metadata?.domain;
     const now     = Math.floor(Date.now() / 1000);
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
 
-    const domain = url.searchParams.get("domain") || result.metadata?.domain || "";
-
     let baseKey = env.ENCODE_KEY || "ntt-hub";
-
     if (domain) {
       const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
         .bind(domain).first();
-      if (settings && settings.encode_key) {
-        baseKey = settings.encode_key;
-      }
+      if (settings && settings.encode_key) baseKey = settings.encode_key;
     }
 
     const payload = key + "|" + left;
     const encoded = encodeData(payload, baseKey);
-
     return text(encoded, 200, request);
   }
 
@@ -349,9 +349,7 @@ async function handleRequest(request, env, ctx) {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: "error", message: "Missing hwid" }, 400, request);
 
-    const readDomain = url.searchParams.get("domain") || "";
-    const kvKey = readDomain ? `${readDomain}/${hwid}` : `Key/${hwid}`;
-    const result = await env["ntt-system"].getWithMetadata(kvKey);
+    const result = await env["ntt-system"].getWithMetadata(`Key/${hwid}`);
     if (!result?.value)
       return json({ status: "error", message: "Key not found or expired" }, 404, request);
 
@@ -397,13 +395,6 @@ async function handleRequest(request, env, ctx) {
     const result = await env.DB.prepare(
       "INSERT INTO users (username, email, password, created_at) VALUES (?, ?, ?, ?) RETURNING id"
     ).bind(username, email, hashedPassword, now).first();
-
-    const defaultDomain = username.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g, '').slice(0, 15);
-    await env.DB.prepare(`
-      INSERT INTO user_settings (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
-      VALUES (?, ?, 'KEY', 'ntt-hub', '', '', 1, '', '', ?, ?)
-      ON CONFLICT(user_id) DO NOTHING
-    `).bind(result.id, defaultDomain, now, now).run();
 
     const token = await generateToken(result.id, username);
 
@@ -491,17 +482,11 @@ async function handleRequest(request, env, ctx) {
       return json({ success: false, error: "Invalid website domain" }, 400, request);
 
     const finalKeyDomain = (key_domain || "KEY").toUpperCase();
-    if (finalKeyDomain.length > 10)
-      return json({ success: false, error: "Key domain max 10 chars" }, 400, request);
+    if (finalKeyDomain.length > 6)
+      return json({ success: false, error: "Key domain max 6 chars" }, 400, request);
 
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
-
-    const domainTaken = await env.DB.prepare(
-      "SELECT user_id FROM user_settings WHERE website_domain = ? AND user_id != ?"
-    ).bind(finalDomain, user_id).first();
-    if (domainTaken)
-      return json({ success: false, error: "Domain already taken by another user" }, 409, request);
 
     const existing = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
       .bind(user_id).first();
@@ -567,6 +552,9 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
+  // ══════════════════════════════════════════════════════════
+  // COMPLETE STEP — FIX: Start dùng token hệ thống, step 1/2 KHÔNG check hash
+  // ══════════════════════════════════════════════════════════
   if (type === "complete_step") {
     let body;
     try { body = await request.json(); }
@@ -576,26 +564,17 @@ async function handleRequest(request, env, ctx) {
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
-    if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
-
-    const userSettings = await env.DB.prepare(
-      "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
-    ).bind(domain).first();
-
-    if (!userSettings) return json({ success: false, error: "domain_not_found" }, 404, request);
-
-    // ── FIX: Start dùng token hệ thống, step 1/2 dùng token của user ──
-    let tokenToUse;
+    // Chỉ verify hash cho step "start" (link hệ thống có anti-bypass)
+    // Step 1/2 là link user tự config qua Linkvertise của họ — không check hash ở đây
+    // vì destination URL của user không nhúng được hwid dynamic vào callback
     if (step === "start") {
-      tokenToUse = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    } else {
-      if (!userSettings.linkvertise_token)
-        return json({ success: false, error: "no_user_token" }, 403, request);
-      tokenToUse = userSettings.linkvertise_token;
+      if (!hash || hash.length < 10)
+        return json({ success: false, error: "missing_hash" }, 403, request);
+      const systemToken = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+      const valid = await checkLinkvertiseHash(hash, systemToken, ua);
+      if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
     }
-
-    const valid = await checkLinkvertiseHash(hash, tokenToUse, ua);
-    if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
+    // step 1 và 2: không cần verify hash, chỉ cần hwid + domain hợp lệ
 
     const now = Math.floor(Date.now() / 1000);
 
@@ -651,7 +630,7 @@ async function handleRequest(request, env, ctx) {
     if (!env["ntt-system"])
       return json({ success: false, error: "KV not bound" }, 500, request);
 
-    await env["ntt-system"].put(`${domain}/${hwid}`, key, {
+    await env["ntt-system"].put(`Key/${hwid}`, key, {
       expirationTtl: 86400,
       metadata: { created: now, domain },
     });
@@ -690,8 +669,8 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { user_id, new_username, password } = body;
-    if (!user_id || !new_username || !password)
+    const { user_id, new_username } = body;
+    if (!user_id || !new_username)
       return json({ success: false, error: "Missing parameters" }, 400, request);
 
     if (!/^[a-zA-Z0-9_ ]+$/.test(new_username))
@@ -699,13 +678,6 @@ async function handleRequest(request, env, ctx) {
 
     if (new_username.length < 3 || new_username.length > 15)
       return json({ success: false, error: "Username must be 3-15 chars" }, 400, request);
-
-    const userCheck = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
-      .bind(user_id).first();
-    if (!userCheck) return json({ success: false, error: "User not found" }, 404, request);
-    const hashedInput = await hashPassword(password);
-    if (hashedInput !== userCheck.password)
-      return json({ success: false, error: "Incorrect password" }, 401, request);
 
     const existing = await env.DB.prepare("SELECT id FROM users WHERE username = ? AND id != ?")
       .bind(new_username, user_id).first();
@@ -752,20 +724,6 @@ async function handleRequest(request, env, ctx) {
       return json({ success: true, total: result?.total || 0 }, request);
     } catch {
       return json({ success: true, total: 0 }, request);
-    }
-  }
-
-  if (type === "get_stats") {
-    try {
-      const keysRow  = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
-      const usersRow = await env.DB.prepare("SELECT COUNT(*) as total FROM users").first();
-      return json({
-        success:    true,
-        total_keys: keysRow?.total  || 0,
-        total_users: usersRow?.total || 0,
-      }, request);
-    } catch {
-      return json({ success: true, total_keys: 0, total_users: 0 }, request);
     }
   }
 
