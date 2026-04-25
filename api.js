@@ -1,6 +1,6 @@
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
 const MIN_FLOW_SECONDS  = 25;
-const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi"; // ← link start của hệ thống
+const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi";
 
 const SESSION_TTL = 2 * 60 * 60;
 const IP_WINDOW   = 24 * 60 * 60;
@@ -17,7 +17,6 @@ const ALLOWED_ORIGINS = [
 
 function getCors(request) {
   const origin  = request?.headers?.get("Origin") || "";
-
   const allowed = (!origin || ALLOWED_ORIGINS.includes(origin)) ? (origin || "*") : "https://ntt-hub.xyz";
   return {
     "Access-Control-Allow-Origin":  allowed,
@@ -328,7 +327,6 @@ async function handleRequest(request, env, ctx) {
     const now     = Math.floor(Date.now() / 1000);
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
 
-    // Ưu tiên domain từ query param, fallback metadata
     const domain = url.searchParams.get("domain") || result.metadata?.domain || "";
 
     let baseKey = env.ENCODE_KEY || "ntt-hub";
@@ -499,7 +497,6 @@ async function handleRequest(request, env, ctx) {
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
 
-    // Check domain trùng với user khác
     const domainTaken = await env.DB.prepare(
       "SELECT user_id FROM user_settings WHERE website_domain = ? AND user_id != ?"
     ).bind(finalDomain, user_id).first();
@@ -585,10 +582,19 @@ async function handleRequest(request, env, ctx) {
       "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
     ).bind(domain).first();
 
-    if (!userSettings?.linkvertise_token)
-      return json({ success: false, error: "domain_not_found" }, 404, request);
+    if (!userSettings) return json({ success: false, error: "domain_not_found" }, 404, request);
 
-    const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
+    // ── FIX: Start dùng token hệ thống, step 1/2 dùng token của user ──
+    let tokenToUse;
+    if (step === "start") {
+      tokenToUse = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
+    } else {
+      if (!userSettings.linkvertise_token)
+        return json({ success: false, error: "no_user_token" }, 403, request);
+      tokenToUse = userSettings.linkvertise_token;
+    }
+
+    const valid = await checkLinkvertiseHash(hash, tokenToUse, ua);
     if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
 
     const now = Math.floor(Date.now() / 1000);
@@ -604,7 +610,6 @@ async function handleRequest(request, env, ctx) {
     if (step === "start") {
       await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 1) {
-
       await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
     } else if (step === 2) {
       await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
