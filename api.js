@@ -394,10 +394,14 @@ async function handleRequest(request, env, ctx) {
     const flowKey = flow_id || "default";
 
     if (step === "start") {
-      if (!captcha_token) return json({ success: false, error: "captcha_required" }, 403, request);
-      const ct = await env.DB.prepare("SELECT * FROM captcha_sessions WHERE id = ?").bind(captcha_token).first();
-      if (!ct || !ct.used || ct.hwid !== hwid) return json({ success: false, error: "invalid_captcha_token" }, 403, request);
-      await env.DB.prepare("DELETE FROM captcha_sessions WHERE id = ?").bind(captcha_token).run();
+      const sys = await env.DB.prepare("SELECT start_type FROM system_settings WHERE id = 1").first();
+      const startType = sys?.start_type || "linkvertise";
+      if (startType !== "youtube") {
+        if (!captcha_token) return json({ success: false, error: "captcha_required" }, 403, request);
+        const ct = await env.DB.prepare("SELECT * FROM captcha_sessions WHERE id = ?").bind(captcha_token).first();
+        if (!ct || !ct.used || ct.hwid !== hwid) return json({ success: false, error: "invalid_captcha_token" }, 403, request);
+        await env.DB.prepare("DELETE FROM captcha_sessions WHERE id = ?").bind(captcha_token).run();
+      }
     }
 
     const userSettings = await env.DB.prepare(
