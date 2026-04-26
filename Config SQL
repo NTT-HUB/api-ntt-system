@@ -57,3 +57,5 @@ CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id);
 CREATE INDEX IF NOT EXISTS idx_settings_domain ON user_settings(website_domain);
 ALTER TABLE user_settings ADD COLUMN step1_type TEXT DEFAULT 'linkvertise';
 ALTER TABLE user_settings ADD COLUMN step2_type TEXT DEFAULT 'linkvertise';
+ALTER TABLE user_settings ADD COLUMN step1_yt_links TEXT DEFAULT '[]';
+ALTER TABLE user_settings ADD COLUMN step2_yt_links TEXT DEFAULT '[]';
