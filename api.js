@@ -535,6 +535,7 @@ async function handleRequest(request, env, ctx) {
       user_id, website_domain, key_domain, encode_key,
       linkvertise_token, discord_webhook, ad_steps,
       step1_link, step2_link, step1_type, step2_type,
+      step1_yt_links, step2_yt_links,
     } = body;
 
     if (!user_id || !website_domain)
@@ -570,13 +571,15 @@ async function handleRequest(request, env, ctx) {
     const finalSteps     = ad_steps          !== undefined ? ad_steps          : (existing?.ad_steps          || 1);
     const finalStep1     = step1_link        !== undefined ? step1_link        : (existing?.step1_link        || "");
     const finalStep2     = step2_link        !== undefined ? step2_link        : (existing?.step2_link        || "");
-    const finalStep1Type = step1_type        !== undefined ? step1_type        : (existing?.step1_type        || "linkvertise");
-    const finalStep2Type = step2_type        !== undefined ? step2_type        : (existing?.step2_type        || "linkvertise");
+    const finalStep1Type  = step1_type       !== undefined ? step1_type       : (existing?.step1_type       || "linkvertise");
+    const finalStep2Type  = step2_type       !== undefined ? step2_type       : (existing?.step2_type       || "linkvertise");
+    const finalStep1Yt    = step1_yt_links   !== undefined ? step1_yt_links   : (existing?.step1_yt_links   || "[]");
+    const finalStep2Yt    = step2_yt_links   !== undefined ? step2_yt_links   : (existing?.step2_yt_links   || "[]");
 
     await env.DB.prepare(`
       INSERT INTO user_settings
-        (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, step1_type, step2_type, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, step1_type, step2_type, step1_yt_links, step2_yt_links, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
         website_domain    = excluded.website_domain,
         key_domain        = excluded.key_domain,
@@ -588,11 +591,14 @@ async function handleRequest(request, env, ctx) {
         step2_link        = excluded.step2_link,
         step1_type        = excluded.step1_type,
         step2_type        = excluded.step2_type,
+        step1_yt_links    = excluded.step1_yt_links,
+        step2_yt_links    = excluded.step2_yt_links,
         updated_at        = excluded.updated_at
     `).bind(
       user_id, finalDomain, finalKeyDomain, finalEncodeKey,
       finalToken, finalWebhook, finalSteps,
-      finalStep1, finalStep2, finalStep1Type, finalStep2Type, now, now,
+      finalStep1, finalStep2, finalStep1Type, finalStep2Type,
+      finalStep1Yt, finalStep2Yt, now, now,
     ).run();
 
     return json({ success: true, message: "Settings saved", website_domain: finalDomain }, request);
