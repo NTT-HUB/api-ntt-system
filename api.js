@@ -101,14 +101,16 @@ function encodeData(plaintext, baseKey) {
   return timeEncoded + "|" + t + "|" + encodedStr;
 }
 
-async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
+async function sendWebhook(webhookUrl, { hwid, key, hwidsToday, flowKey, flowName }) {
   if (!webhookUrl) return;
+  const flowLabel = flowName ? `${flowName} (ID: ${flowKey})` : flowKey === "default" ? "Default" : `Flow ${flowKey}`;
   const embed = {
     title: "New Key Generated",
     color: 0x00ff9d,
     fields: [
       { name: "HWID",  value: `\`${hwid}\``, inline: false },
       { name: "Key",   value: `\`${key}\``,  inline: false },
+      { name: "Flow",  value: flowLabel,      inline: true },
       { name: "HWIDs Today (this IP)", value: `${hwidsToday}`, inline: true },
     ],
     footer: { text: "NTT System" },
@@ -548,7 +550,15 @@ async function handleRequest(request, env, ctx) {
     } catch {}
 
     if (updatedSettings?.discord_webhook) {
-      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
+      let flowName = null;
+      if (flowKey !== "default") {
+        try {
+          const flowRow = await env.DB.prepare("SELECT name FROM user_flows WHERE user_id = ? AND flow_id = ?")
+            .bind(settings.user_id, flowKey).first();
+          if (flowRow) flowName = flowRow.name;
+        } catch {}
+      }
+      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday, flowKey, flowName }));
     }
 
     return json({
