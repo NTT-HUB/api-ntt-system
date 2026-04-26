@@ -466,9 +466,23 @@ async function handleRequest(request, env, ctx) {
       progress = { created_at: now, start: 0, step1: 0, step2: 0 };
     }
 
-    if (step !== "start" && progress.start) {
-      const elapsed = now - progress.created_at;
-      if (elapsed < bypassSeconds) {
+    // Bypass check: tính time theo từng transition
+    if (step === 1 && progress.start) {
+      // Start → Step1: check theo start_type của admin
+      const sys = await env.DB.prepare("SELECT start_type FROM system_settings WHERE id = 1").first();
+      const sysType = sys?.start_type || "linkvertise";
+      const startBypass = (sysType === "lootlab") ? 40 : (sysType === "workink") ? 30 : 10;
+      const elapsed = now - (progress.created_at || now);
+      if (elapsed < startBypass) {
+        await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
+        return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
+      }
+    } else if (step === 2 && progress.step1) {
+      // Step1 → Step2: check theo step1_type
+      const s1type = userSettings.step1_type || "linkvertise";
+      const s1Bypass = (s1type === "lootlab") ? 40 : (s1type === "workink") ? 30 : 10;
+      const elapsed = now - (progress.step1_at || progress.created_at || now);
+      if (elapsed < s1Bypass) {
         await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
         return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
       }
@@ -477,9 +491,9 @@ async function handleRequest(request, env, ctx) {
     if (step === "start") {
       await env.DB.prepare("UPDATE progress SET start = 1, created_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
     } else if (step === 1) {
-      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
+      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1, step1_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
     } else if (step === 2) {
-      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
+      await env.DB.prepare("UPDATE progress SET step2 = 1, step2_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
     }
 
     return json({ success: true, message: `Step ${step} completed` }, request);
@@ -508,11 +522,25 @@ async function handleRequest(request, env, ctx) {
       return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
 
     const now = Math.floor(Date.now() / 1000);
+
+    // Step1 → Generate bypass check
     const step1Type = settings.step1_type || "linkvertise";
-    const bypassSeconds = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : 10;
-    if (progress.start && (now - progress.created_at) < bypassSeconds) {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+    const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : 10;
+    const step1Time = progress.step1_at || progress.created_at || 0;
+    if (progress.step1 && (now - step1Time) < step1Bypass) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
       return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
+    }
+
+    // Step2 → Generate bypass check (nếu có step2)
+    if (settings.ad_steps === 2 && progress.step2) {
+      const step2Type = settings.step2_type || "linkvertise";
+      const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : 10;
+      const step2Time = progress.step2_at || progress.step1_at || progress.created_at || 0;
+      if ((now - step2Time) < step2Bypass) {
+        await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
+        return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
+      }
     }
 
     if (!progress.step1)
