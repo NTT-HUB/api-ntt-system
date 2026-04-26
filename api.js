@@ -438,12 +438,12 @@ async function handleRequest(request, env, ctx) {
                        return "system_start";
                      })();
 
-    let bypassSeconds = (stepType === "lootlab") ? 40 : (stepType === "workink") ? 30 : 10;
+    let bypassSeconds = (stepType === "lootlab") ? 40 : (stepType === "workink") ? 30 : (stepType === "youtube") ? 15 : 10;
 
     if (step === "start") {
       const sys = await env.DB.prepare("SELECT * FROM system_settings WHERE id = 1").first();
       const sysType = sys?.start_type || "linkvertise";
-      bypassSeconds = (sysType === "lootlab") ? 40 : (sysType === "workink") ? 30 : 10;
+      bypassSeconds = (sysType === "lootlab") ? 40 : (sysType === "workink") ? 30 : (sysType === "youtube") ? 15 : 10;
       if (sysType === "linkvertise" && sys?.linkvertise_token?.trim()) {
         if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
         const valid = await checkLinkvertiseHash(hash, sys.linkvertise_token, ua);
@@ -469,7 +469,7 @@ async function handleRequest(request, env, ctx) {
     // Bypass check: Step1→Step2
     if (step === 2 && progress.step1) {
       const s1type = userSettings.step1_type || "linkvertise";
-      const s1Bypass = (s1type === "lootlab") ? 40 : (s1type === "workink") ? 30 : 10;
+      const s1Bypass = (s1type === "lootlab") ? 40 : (s1type === "workink") ? 30 : (s1type === "youtube") ? 15 : 10;
       const elapsed = now - (progress.step1_at || progress.created_at || now);
       if (elapsed < s1Bypass) {
         await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
@@ -514,7 +514,7 @@ async function handleRequest(request, env, ctx) {
 
     // Step1 → Generate bypass check
     const step1Type = settings.step1_type || "linkvertise";
-    const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : 10;
+    const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
     const step1Time = progress.step1_at || progress.created_at || 0;
     if (progress.step1 && (now - step1Time) < step1Bypass) {
       await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
@@ -524,7 +524,7 @@ async function handleRequest(request, env, ctx) {
     // Step2 → Generate bypass check (nếu có step2)
     if (settings.ad_steps === 2 && progress.step2) {
       const step2Type = settings.step2_type || "linkvertise";
-      const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : 10;
+      const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
       const step2Time = progress.step2_at || progress.step1_at || progress.created_at || 0;
       if ((now - step2Time) < step2Bypass) {
         await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
