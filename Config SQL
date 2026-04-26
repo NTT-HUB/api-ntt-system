@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS progress (
   step2      INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL,
   flow_id    TEXT    DEFAULT 'default',
+  step1_at   INTEGER,
+  step2_at   INTEGER,
   PRIMARY KEY (hwid, flow_id)
 );
 
@@ -122,6 +124,3 @@ CREATE TABLE IF NOT EXISTS captcha_sessions (
   used       INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL
 );
-
-ALTER TABLE progress ADD COLUMN step2_at INTEGER;
-ALTER TABLE progress ADD COLUMN step2_at INTEGER;
