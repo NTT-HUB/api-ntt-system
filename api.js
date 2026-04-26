@@ -349,7 +349,27 @@ async function handleRequest(request, env, ctx) {
       "INSERT INTO captcha_sessions (id, answer, hwid, used, created_at) VALUES (?, ?, ?, 0, ?)"
     ).bind(id, answer, hwid, now).run();
 
-    return json({ success: true, id, answer }, request);
+    const colors = ['#00ff9d','#6ee7b7','#a5f3fc','#c4b5fd','#fde68a'];
+    const noises = Array.from({length: 6}, () => {
+      const x1 = Math.floor(Math.random()*200), y1 = Math.floor(Math.random()*60);
+      const x2 = Math.floor(Math.random()*200), y2 = Math.floor(Math.random()*60);
+      const op = (0.2 + Math.random()*0.3).toFixed(2);
+      return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="rgba(255,255,255,${op})" stroke-width="1"/>`;
+    }).join('');
+
+    const letters = answer.split('').map((ch, i) => {
+      const x = 20 + i * 36;
+      const y = 38 + Math.floor((Math.random()-0.5)*10);
+      const rot = Math.floor((Math.random()-0.5)*25);
+      const size = 24 + Math.floor(Math.random()*8);
+      const col = colors[i % colors.length];
+      return `<text x="${x}" y="${y}" font-family="monospace" font-size="${size}" font-weight="bold" fill="${col}" transform="rotate(${rot},${x},${y})">${ch}</text>`;
+    }).join('');
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><rect width="200" height="60" fill="#0d1120"/>${noises}${letters}</svg>`;
+    const b64 = btoa(svg);
+
+    return json({ success: true, id, image: `data:image/svg+xml;base64,${b64}` }, request);
   }
 
   if (type === "captcha_verify") {
