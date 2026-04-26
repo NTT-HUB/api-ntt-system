@@ -417,12 +417,12 @@ async function handleRequest(request, env, ctx) {
                        return "system_start";
                      })();
 
-    let bypassSeconds = (stepType === "lootlab" || stepType === "workink") ? 30 : 10;
+    let bypassSeconds = (stepType === "lootlab") ? 40 : (stepType === "workink") ? 30 : 10;
 
     if (step === "start") {
       const sys = await env.DB.prepare("SELECT * FROM system_settings WHERE id = 1").first();
       const sysType = sys?.start_type || "linkvertise";
-      bypassSeconds = (sysType === "lootlab" || sysType === "workink") ? 30 : 10;
+      bypassSeconds = (sysType === "lootlab") ? 40 : (sysType === "workink") ? 30 : 10;
       if (sysType === "linkvertise" && sys?.linkvertise_token?.trim()) {
         if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
         const valid = await checkLinkvertiseHash(hash, sys.linkvertise_token, ua);
@@ -487,7 +487,7 @@ async function handleRequest(request, env, ctx) {
 
     const now = Math.floor(Date.now() / 1000);
     const step1Type = settings.step1_type || "linkvertise";
-    const bypassSeconds = (step1Type === "lootlab" || step1Type === "workink") ? 30 : 10;
+    const bypassSeconds = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : 10;
     if (progress.start && (now - progress.created_at) < bypassSeconds) {
       await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
       return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
