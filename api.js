@@ -238,10 +238,11 @@ async function handleRequest(request, env, ctx) {
   }
 
   if (type === "progress") {
-    const hwid = normalizeHwid(url);
+    const hwid   = normalizeHwid(url);
+    const flowId = url.searchParams.get("flow") || "default";
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
 
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowId).first();
     if (!row) return json({ status: false, start: false, step1: false, step2: false }, 200, request);
 
     return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
@@ -335,9 +336,11 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, step, hash, domain } = body;
+    const { hwid, step, hash, domain, flow_id } = body;
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
+
+    const flowKey = flow_id || "default";
 
     const userSettings = await env.DB.prepare(
       "SELECT linkvertise_token, step1_type, step2_type FROM user_settings WHERE website_domain = ?"
@@ -371,29 +374,29 @@ async function handleRequest(request, env, ctx) {
 
     const now = Math.floor(Date.now() / 1000);
 
-    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
 
     if (!progress) {
       await env.DB.prepare(
-        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
-      ).bind(hwid, now, now).run();
+        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at, flow_id) VALUES (?, ?, 0, 0, 0, ?, ?)"
+      ).bind(hwid, now, now, flowKey).run();
       progress = { created_at: now, start: 0, step1: 0, step2: 0 };
     }
 
     if (step !== "start" && progress.start) {
       const elapsed = now - progress.created_at;
       if (elapsed < bypassSeconds) {
-        await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+        await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
         return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
       }
     }
 
     if (step === "start") {
-      await env.DB.prepare("UPDATE progress SET start = 1, created_at = ? WHERE hwid = ?").bind(now, hwid).run();
+      await env.DB.prepare("UPDATE progress SET start = 1, created_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
     } else if (step === 1) {
-      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
+      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
     } else if (step === 2) {
-      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
+      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
     }
 
     return json({ success: true, message: `Step ${step} completed` }, request);
@@ -404,12 +407,13 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, domain, key_prefix } = body;
+    const { hwid, domain, key_prefix, flow_id } = body;
     if (!hwid || !domain || !key_prefix)
       return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
-    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    const flowKey = flow_id || "default";
+    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
     const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
       .bind(domain).first();
 
@@ -448,7 +452,7 @@ async function handleRequest(request, env, ctx) {
       "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
     ).bind(domain).run();
 
-    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+    await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
 
     const updatedSettings = await env.DB.prepare(
       "SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?"
@@ -661,8 +665,60 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, settings }, request);
   }
 
+  if (type === "get_flows") {
+    const userId = url.searchParams.get("user_id");
+    if (!userId) return json({ success: false, error: "Missing user_id" }, 400, request);
+    const flows = await env.DB.prepare("SELECT * FROM user_flows WHERE user_id = ? ORDER BY flow_id ASC").bind(userId).all();
+    return json({ success: true, flows: flows.results || [] }, request);
+  }
+
+  if (type === "save_flow") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, flow_id, name, ad_steps, step1_type, step1_link, step1_yt_links, step2_type, step2_link, step2_yt_links } = body;
+    if (!user_id || !flow_id) return json({ success: false, error: "Missing params" }, 400, request);
+
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(`
+      INSERT INTO user_flows (user_id, flow_id, name, ad_steps, step1_type, step1_link, step1_yt_links, step2_type, step2_link, step2_yt_links, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, flow_id) DO UPDATE SET
+        name           = excluded.name,
+        ad_steps       = excluded.ad_steps,
+        step1_type     = excluded.step1_type,
+        step1_link     = excluded.step1_link,
+        step1_yt_links = excluded.step1_yt_links,
+        step2_type     = excluded.step2_type,
+        step2_link     = excluded.step2_link,
+        step2_yt_links = excluded.step2_yt_links,
+        updated_at     = excluded.updated_at
+    `).bind(
+      user_id, flow_id, name || `Flow ${flow_id}`, ad_steps || 1,
+      step1_type || "linkvertise", step1_link || "", step1_yt_links || "[]",
+      step2_type || "linkvertise", step2_link || "", step2_yt_links || "[]",
+      now, now
+    ).run();
+
+    return json({ success: true, message: "Flow saved" }, request);
+  }
+
+  if (type === "delete_flow") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { user_id, flow_id } = body;
+    if (!user_id || !flow_id) return json({ success: false, error: "Missing params" }, 400, request);
+
+    await env.DB.prepare("DELETE FROM user_flows WHERE user_id = ? AND flow_id = ?").bind(user_id, flow_id).run();
+    return json({ success: true, message: "Flow deleted" }, request);
+  }
+
   if (type === "get_settings_by_domain") {
-    const domain = url.searchParams.get("domain");
+    const domain  = url.searchParams.get("domain");
+    const flowId  = url.searchParams.get("flow");
     if (!domain) return json({ success: false, error: "Missing domain" }, 400, request);
 
     const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
@@ -673,13 +729,31 @@ async function handleRequest(request, env, ctx) {
 
     const sys = await env.DB.prepare("SELECT * FROM system_settings WHERE id = 1").first();
 
+    let flowSettings = {};
+    if (flowId) {
+      const flow = await env.DB.prepare("SELECT * FROM user_flows WHERE user_id = ? AND flow_id = ?")
+        .bind(settings.user_id, flowId).first();
+      if (flow) {
+        flowSettings = {
+          ad_steps:       flow.ad_steps,
+          step1_type:     flow.step1_type,
+          step1_link:     flow.step1_link,
+          step1_yt_links: flow.step1_yt_links,
+          step2_type:     flow.step2_type,
+          step2_link:     flow.step2_link,
+          step2_yt_links: flow.step2_yt_links,
+        };
+      }
+    }
+
     return json({
       success: true,
       settings: {
         ...settings,
-        start_link:        sys?.start_link        || env.SYSTEM_START_LINK || SYSTEM_START_LINK,
-        start_type:        sys?.start_type        || "linkvertise",
-        start_yt_links:    sys?.start_yt_links    || "[]",
+        ...flowSettings,
+        start_link:     sys?.start_link     || env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+        start_type:     sys?.start_type     || "linkvertise",
+        start_yt_links: sys?.start_yt_links || "[]",
       },
     }, request);
   }
