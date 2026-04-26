@@ -290,6 +290,39 @@ async function handleRequest(request, env, ctx) {
     return json({ status: "success", hwid, key: result.value, left }, 200, request);
   }
 
+  if (type === "get_system_settings") {
+    const s = await env.DB.prepare("SELECT * FROM system_settings WHERE id = 1").first();
+    return json({ success: true, settings: s || {} }, request);
+  }
+
+  if (type === "save_system_settings") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { start_type, start_link, start_yt_links, linkvertise_token } = body;
+    const now = Math.floor(Date.now() / 1000);
+
+    await env.DB.prepare(`
+      INSERT INTO system_settings (id, start_type, start_link, start_yt_links, linkvertise_token, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        start_type        = excluded.start_type,
+        start_link        = excluded.start_link,
+        start_yt_links    = excluded.start_yt_links,
+        linkvertise_token = excluded.linkvertise_token,
+        updated_at        = excluded.updated_at
+    `).bind(
+      start_type || "linkvertise",
+      start_link || "",
+      start_yt_links || "[]",
+      linkvertise_token || "",
+      now
+    ).run();
+
+    return json({ success: true, message: "System settings saved" }, request);
+  }
+
   if (type === "get_start_link") {
     return json({
       success: true,
@@ -315,11 +348,22 @@ async function handleRequest(request, env, ctx) {
 
     const stepType = step === 1 ? (userSettings.step1_type || "linkvertise")
                    : step === 2 ? (userSettings.step2_type || "linkvertise")
-                   : "linkvertise";
+                   : (() => {
+                       return "system_start";
+                     })();
 
-    const bypassSeconds = (stepType === "lootlab" || stepType === "workink") ? 30 : 10;
+    let bypassSeconds = (stepType === "lootlab" || stepType === "workink") ? 30 : 10;
 
-    if (stepType === "linkvertise" && userSettings.linkvertise_token?.trim()) {
+    if (step === "start") {
+      const sys = await env.DB.prepare("SELECT * FROM system_settings WHERE id = 1").first();
+      const sysType = sys?.start_type || "linkvertise";
+      bypassSeconds = (sysType === "lootlab" || sysType === "workink") ? 30 : 10;
+      if (sysType === "linkvertise" && sys?.linkvertise_token?.trim()) {
+        if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
+        const valid = await checkLinkvertiseHash(hash, sys.linkvertise_token, ua);
+        if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
+      }
+    } else if (stepType === "linkvertise" && userSettings.linkvertise_token?.trim()) {
       if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
       const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
       if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
@@ -627,11 +671,15 @@ async function handleRequest(request, env, ctx) {
     if (!settings)
       return json({ success: false, error: "Settings not found" }, 404, request);
 
+    const sys = await env.DB.prepare("SELECT * FROM system_settings WHERE id = 1").first();
+
     return json({
       success: true,
       settings: {
         ...settings,
-        start_link: env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+        start_link:        sys?.start_link        || env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+        start_type:        sys?.start_type        || "linkvertise",
+        start_yt_links:    sys?.start_yt_links    || "[]",
       },
     }, request);
   }
