@@ -1,6 +1,6 @@
 const LINKVERTISE_TOKEN = "7581177bce5e0eb39a7b44cf7aa9c82128e535e9736074c5945f7255975204f0";
 const MIN_FLOW_SECONDS  = 25;
-const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi"; // ← link start của hệ thống
+const SYSTEM_START_LINK = "https://link-center.net/1213408/testapi";
 
 const SESSION_TTL = 2 * 60 * 60;
 const IP_WINDOW   = 24 * 60 * 60;
@@ -17,7 +17,6 @@ const ALLOWED_ORIGINS = [
 
 function getCors(request) {
   const origin  = request?.headers?.get("Origin") || "";
-
   const allowed = (!origin || ALLOWED_ORIGINS.includes(origin)) ? (origin || "*") : "https://ntt-hub.xyz";
   return {
     "Access-Control-Allow-Origin":  allowed,
@@ -51,8 +50,7 @@ function normalizeHwid(url) {
   try {
     const decoded = decodeURIComponent(raw).replace(/ /g, "+");
     return decoded.length > 50 ? null : decoded;
-  }
-  catch { 
+  } catch {
     const h = raw.replace(/ /g, "+");
     return h.length > 50 ? null : h;
   }
@@ -105,7 +103,6 @@ function encodeData(plaintext, baseKey) {
 
 async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
   if (!webhookUrl) return;
-
   const embed = {
     title: "New Key Generated",
     color: 0x00ff9d,
@@ -117,7 +114,6 @@ async function sendWebhook(webhookUrl, { hwid, key, hwidsToday }) {
     footer: { text: "NTT System" },
     timestamp: new Date().toISOString(),
   };
-
   try {
     await fetch(webhookUrl, {
       method: "POST",
@@ -241,75 +237,11 @@ async function handleRequest(request, env, ctx) {
     return json({ status: true, message: "initialized" }, request);
   }
 
-  if (type === "step1") {
-    const hwid = normalizeHwid(url);
-    if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
-
-    await env.DB.prepare("UPDATE progress SET step1 = 1 WHERE hwid = ?").bind(hwid).run();
-    return json({ status: true, step1: true }, request);
-  }
-
-  if (type === "step2") {
-    const hwid = normalizeHwid(url);
-    const hash = url.searchParams.get("hash");
-    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
-    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
-
-    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    const valid = await checkLinkvertiseHash(hash, token, ua);
-    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
-
-    await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
-    return json({ status: true, step2: true }, request);
-  }
-
-  if (type === "step3") {
-    const hwid = normalizeHwid(url);
-    const hash = url.searchParams.get("hash");
-    if (!hwid || !hash) return json({ status: false, error: "missing_params" }, 400, request);
-
-    const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    if (!row) return json({ status: false, error: "session_not_found" }, 404, request);
-    if (!row.step1) return json({ status: false, error: "step1_not_done" }, 403, request);
-    if (!row.step2) return json({ status: false, error: "step2_not_done" }, 403, request);
-
-    const now     = Math.floor(Date.now() / 1000);
-    const token = env.LINKVERTISE_TOKEN || LINKVERTISE_TOKEN;
-    const valid = await checkLinkvertiseHash(hash, token, ua);
-    if (!valid) return json({ status: false, error: "invalid_hash" }, 403, request);
-
-    const elapsed = now - row.created_at;
-    if (elapsed < MIN_FLOW_SECONDS) {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-      return json({ status: false, error: "bypass_detected" }, 403, request);
-    }
-
-    if (!env["ntt-system"]) return json({ status: false, error: "kv_not_bound" }, 500, request);
-
-    const step3Domain = url.searchParams.get("domain") || "";
-    const key = "KEY_" + Math.random().toString().slice(2, 12);
-    try {
-      await env["ntt-system"].put(`${step3Domain || "default"}/${hwid}`, key, { expirationTtl: 86400, metadata: { created: now, domain: step3Domain } });
-    } catch (kvErr) {
-      return json({ status: false, error: "kv_write_failed", message: kvErr?.message }, 500, request);
-    }
-
-    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-    return json({ status: true, key, expires_in: 86400 }, request);
-  }
-
   if (type === "progress") {
     const hwid = normalizeHwid(url);
     if (!hwid) return json({ status: false, error: "missing_hwid" }, 400, request);
 
     const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-
     if (!row) return json({ status: false, start: false, step1: false, step2: false }, 200, request);
 
     return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
@@ -327,23 +259,17 @@ async function handleRequest(request, env, ctx) {
     const created = result.metadata?.created;
     const now     = Math.floor(Date.now() / 1000);
     const left    = created ? Math.max(0, 86400 - (now - created)) : 0;
-
-    // Ưu tiên domain từ query param, fallback metadata
-    const domain = url.searchParams.get("domain") || result.metadata?.domain || "";
+    const domain  = url.searchParams.get("domain") || result.metadata?.domain || "";
 
     let baseKey = env.ENCODE_KEY || "ntt-hub";
-
     if (domain) {
       const settings = await env.DB.prepare("SELECT encode_key FROM user_settings WHERE website_domain = ?")
         .bind(domain).first();
-      if (settings && settings.encode_key) {
-        baseKey = settings.encode_key;
-      }
+      if (settings?.encode_key) baseKey = settings.encode_key;
     }
 
     const payload = key + "|" + left;
     const encoded = encodeData(payload, baseKey);
-
     return text(encoded, 200, request);
   }
 
@@ -368,6 +294,133 @@ async function handleRequest(request, env, ctx) {
     return json({
       success: true,
       start_link: env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+    }, request);
+  }
+
+  if (type === "complete_step") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { hwid, step, hash, domain } = body;
+    if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
+    if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
+
+    const userSettings = await env.DB.prepare(
+      "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
+    ).bind(domain).first();
+
+    if (!userSettings)
+      return json({ success: false, error: "domain_not_found" }, 404, request);
+
+    // Chỉ check hash nếu user có token
+    if (userSettings.linkvertise_token && userSettings.linkvertise_token.trim() !== "") {
+      if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
+      const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
+      if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+
+    if (!progress) {
+      await env.DB.prepare(
+        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
+      ).bind(hwid, now, now).run();
+      progress = { created_at: now, start: 0, step1: 0, step2: 0 };
+    }
+
+    // Bypass detection: dưới 10s kể từ lúc start thì reset
+    if (step !== "start" && progress.start) {
+      const elapsed = now - progress.created_at;
+      if (elapsed < 10) {
+        await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+        return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
+      }
+    }
+
+    if (step === "start") {
+      await env.DB.prepare("UPDATE progress SET start = 1, created_at = ? WHERE hwid = ?").bind(now, hwid).run();
+    } else if (step === 1) {
+      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
+    } else if (step === 2) {
+      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
+    }
+
+    return json({ success: true, message: `Step ${step} completed` }, request);
+  }
+
+  if (type === "create_key") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { hwid, domain, key_prefix } = body;
+    if (!hwid || !domain || !key_prefix)
+      return json({ success: false, error: "Missing params" }, 400, request);
+    if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
+
+    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
+    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
+      .bind(domain).first();
+
+    if (!settings)
+      return json({ success: false, error: "Settings not found" }, 404, request);
+
+    if (!progress)
+      return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
+
+    // Bypass detection
+    const now = Math.floor(Date.now() / 1000);
+    if (progress.start && (now - progress.created_at) < 10) {
+      await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+      return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
+    }
+
+    if (!progress.step1)
+      return json({ success: false, error: "Step 1 not completed" }, 403, request);
+
+    if (settings.ad_steps === 2 && !progress.step2)
+      return json({ success: false, error: "Step 2 not completed" }, 403, request);
+
+    const keyId = Math.random().toString().slice(2, 9);
+    const key   = `${key_prefix.toUpperCase()}_${keyId}`;
+
+    if (!env["ntt-system"])
+      return json({ success: false, error: "KV not bound" }, 500, request);
+
+    await env["ntt-system"].put(`${domain}/${hwid}`, key, {
+      expirationTtl: 86400,
+      metadata: { created: now, domain },
+    });
+
+    await env.DB.prepare(
+      "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
+    ).bind(domain).run();
+
+    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
+
+    const updatedSettings = await env.DB.prepare(
+      "SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?"
+    ).bind(domain).first();
+
+    let hwidsToday = 1;
+    try {
+      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?")
+        .bind(request.headers.get("CF-Connecting-IP") || "unknown").first();
+      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
+    } catch {}
+
+    if (updatedSettings?.discord_webhook) {
+      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
+    }
+
+    return json({
+      success: true,
+      key,
+      expires_in: 86400,
+      total_keys: updatedSettings?.total_keys || 1,
     }, request);
   }
 
@@ -483,8 +536,7 @@ async function handleRequest(request, env, ctx) {
       return json({ success: false, error: "Missing required fields" }, 400, request);
 
     const finalDomain = website_domain
-      .trim()
-      .toLowerCase()
+      .trim().toLowerCase()
       .replace(/\s+/g, "-")
       .replace(/[^a-z0-9\-]/g, "")
       .slice(0, 15);
@@ -499,7 +551,6 @@ async function handleRequest(request, env, ctx) {
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
 
-    // Check domain trùng với user khác
     const domainTaken = await env.DB.prepare(
       "SELECT user_id FROM user_settings WHERE website_domain = ? AND user_id != ?"
     ).bind(finalDomain, user_id).first();
@@ -570,116 +621,6 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
-  if (type === "complete_step") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { hwid, step, hash, domain } = body;
-    if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
-    if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
-
-    if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
-
-    const userSettings = await env.DB.prepare(
-      "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
-    ).bind(domain).first();
-
-    if (!userSettings?.linkvertise_token)
-      return json({ success: false, error: "domain_not_found" }, 404, request);
-
-    const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
-    if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
-
-    const now = Math.floor(Date.now() / 1000);
-
-    let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-
-    if (!progress) {
-      await env.DB.prepare(
-        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at) VALUES (?, ?, 0, 0, 0, ?)"
-      ).bind(hwid, now, now).run();
-    }
-
-    if (step === "start") {
-      await env.DB.prepare("UPDATE progress SET start = 1 WHERE hwid = ?").bind(hwid).run();
-    } else if (step === 1) {
-
-      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1 WHERE hwid = ?").bind(hwid).run();
-    } else if (step === 2) {
-      await env.DB.prepare("UPDATE progress SET step2 = 1 WHERE hwid = ?").bind(hwid).run();
-    }
-
-    return json({ success: true, message: `Step ${step} completed` }, request);
-  }
-
-  if (type === "create_key") {
-    let body;
-    try { body = await request.json(); }
-    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
-
-    const { hwid, domain, key_prefix } = body;
-    if (!hwid || !domain || !key_prefix)
-      return json({ success: false, error: "Missing params" }, 400, request);
-    if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
-
-    const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ?").bind(hwid).first();
-    const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
-      .bind(domain).first();
-
-    if (!settings)
-      return json({ success: false, error: "Settings not found" }, 404, request);
-
-    if (!progress)
-      return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
-
-    if (!progress.step1)
-      return json({ success: false, error: "Step 1 not completed" }, 403, request);
-
-    if (settings.ad_steps === 2 && !progress.step2)
-      return json({ success: false, error: "Step 2 not completed" }, 403, request);
-
-    const now   = Math.floor(Date.now() / 1000);
-    const keyId = Math.random().toString().slice(2, 9);
-    const key   = `${key_prefix.toUpperCase()}_${keyId}`;
-
-    if (!env["ntt-system"])
-      return json({ success: false, error: "KV not bound" }, 500, request);
-
-    await env["ntt-system"].put(`${domain}/${hwid}`, key, {
-      expirationTtl: 86400,
-      metadata: { created: now, domain },
-    });
-
-    await env.DB.prepare(
-      "UPDATE user_settings SET total_keys = total_keys + 1 WHERE website_domain = ?"
-    ).bind(domain).run();
-
-    await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
-
-    const updatedSettings = await env.DB.prepare(
-      "SELECT total_keys, discord_webhook FROM user_settings WHERE website_domain = ?"
-    ).bind(domain).first();
-
-    let hwidsToday = 1;
-    try {
-      const tr = await env.DB.prepare("SELECT hwids FROM ip_tracking WHERE ip = ?")
-        .bind(request.headers.get("CF-Connecting-IP") || "unknown").first();
-      if (tr) hwidsToday = JSON.parse(tr.hwids).length;
-    } catch {}
-
-    if (updatedSettings?.discord_webhook) {
-      ctx.waitUntil(sendWebhook(updatedSettings.discord_webhook, { hwid, key, hwidsToday }));
-    }
-
-    return json({
-      success: true,
-      key,
-      expires_in: 86400,
-      total_keys: updatedSettings?.total_keys || 1,
-    }, request);
-  }
-
   if (type === "change_username") {
     let body;
     try { body = await request.json(); }
@@ -698,6 +639,7 @@ async function handleRequest(request, env, ctx) {
     const userCheck = await env.DB.prepare("SELECT password FROM users WHERE id = ?")
       .bind(user_id).first();
     if (!userCheck) return json({ success: false, error: "User not found" }, 404, request);
+
     const hashedInput = await hashPassword(password);
     if (hashedInput !== userCheck.password)
       return json({ success: false, error: "Incorrect password" }, 401, request);
@@ -755,8 +697,8 @@ async function handleRequest(request, env, ctx) {
       const keysRow  = await env.DB.prepare("SELECT SUM(total_keys) as total FROM user_settings").first();
       const usersRow = await env.DB.prepare("SELECT COUNT(*) as total FROM users").first();
       return json({
-        success:    true,
-        total_keys: keysRow?.total  || 0,
+        success:     true,
+        total_keys:  keysRow?.total  || 0,
         total_users: usersRow?.total || 0,
       }, request);
     } catch {
