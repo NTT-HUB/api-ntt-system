@@ -331,16 +331,74 @@ async function handleRequest(request, env, ctx) {
     }, request);
   }
 
+  if (type === "captcha_new") {
+    const hwid = url.searchParams.get("hwid");
+    if (!hwid) return json({ success: false, error: "missing_hwid" }, 400, request);
+
+    const chars  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let answer   = "";
+    for (let i = 0; i < 5; i++) answer += chars[Math.floor(Math.random() * chars.length)];
+
+    const id  = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+
+    await env.DB.prepare("DELETE FROM captcha_sessions WHERE hwid = ? OR created_at < ?")
+      .bind(hwid, now - 300).run();
+
+    await env.DB.prepare(
+      "INSERT INTO captcha_sessions (id, answer, hwid, used, created_at) VALUES (?, ?, ?, 0, ?)"
+    ).bind(id, answer, hwid, now).run();
+
+    return json({ success: true, id, answer }, request);
+  }
+
+  if (type === "captcha_verify") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    const { id, answer, hwid } = body;
+    if (!id || !answer || !hwid) return json({ success: false, error: "Missing params" }, 400, request);
+
+    const now = Math.floor(Date.now() / 1000);
+    const row = await env.DB.prepare("SELECT * FROM captcha_sessions WHERE id = ?").bind(id).first();
+
+    if (!row) return json({ success: false, error: "Invalid captcha" }, 403, request);
+    if (row.used) return json({ success: false, error: "Captcha already used" }, 403, request);
+    if (row.hwid !== hwid) return json({ success: false, error: "Invalid captcha" }, 403, request);
+    if (now - row.created_at > 120) {
+      await env.DB.prepare("DELETE FROM captcha_sessions WHERE id = ?").bind(id).run();
+      return json({ success: false, error: "Captcha expired" }, 403, request);
+    }
+    if (row.answer !== answer.toUpperCase().trim()) {
+      await env.DB.prepare("DELETE FROM captcha_sessions WHERE id = ?").bind(id).run();
+      return json({ success: false, error: "Wrong answer" }, 403, request);
+    }
+
+    const token = crypto.randomUUID();
+    await env.DB.prepare("UPDATE captcha_sessions SET used = 1, id = ? WHERE id = ?")
+      .bind(token, id).run();
+
+    return json({ success: true, token }, request);
+  }
+
   if (type === "complete_step") {
     let body;
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, step, hash, domain, flow_id } = body;
+    const { hwid, step, hash, domain, flow_id, captcha_token } = body;
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
     const flowKey = flow_id || "default";
+
+    if (step === "start") {
+      if (!captcha_token) return json({ success: false, error: "captcha_required" }, 403, request);
+      const ct = await env.DB.prepare("SELECT * FROM captcha_sessions WHERE id = ?").bind(captcha_token).first();
+      if (!ct || !ct.used || ct.hwid !== hwid) return json({ success: false, error: "invalid_captcha_token" }, 403, request);
+      await env.DB.prepare("DELETE FROM captcha_sessions WHERE id = ?").bind(captcha_token).run();
+    }
 
     const userSettings = await env.DB.prepare(
       "SELECT linkvertise_token, step1_type, step2_type FROM user_settings WHERE website_domain = ?"
