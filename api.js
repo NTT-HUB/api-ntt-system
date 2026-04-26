@@ -512,21 +512,23 @@ async function handleRequest(request, env, ctx) {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Step1 → Generate bypass check
-    const step1Type = settings.step1_type || "linkvertise";
-    const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
-    const step1Time = progress.step1_at || progress.created_at || 0;
-    if (progress.step1 && (now - step1Time) < step1Bypass) {
-      await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
-      return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
-    }
-
-    // Step2 → Generate bypass check (nếu có step2)
-    if (settings.ad_steps === 2 && progress.step2) {
-      const step2Type = settings.step2_type || "linkvertise";
-      const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
-      const step2Time = progress.step2_at || progress.step1_at || progress.created_at || 0;
-      if ((now - step2Time) < step2Bypass) {
+    if (settings.ad_steps === 2) {
+      // 2 steps: Step1→Step2 và Step2→Generate check riêng
+      if (progress.step2) {
+        const step2Type = settings.step2_type || "linkvertise";
+        const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
+        const step2Time = progress.step2_at || progress.step1_at || progress.created_at || 0;
+        if ((now - step2Time) < step2Bypass) {
+          await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
+          return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
+        }
+      }
+    } else {
+      // 1 step: tính từ created_at (lúc start) đến generate
+      const step1Type = settings.step1_type || "linkvertise";
+      const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
+      const step1Time = progress.created_at || 0;
+      if (progress.step1 && (now - step1Time) < step1Bypass) {
         await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
         return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
       }
