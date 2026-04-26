@@ -466,19 +466,8 @@ async function handleRequest(request, env, ctx) {
       progress = { created_at: now, start: 0, step1: 0, step2: 0 };
     }
 
-    // Bypass check: tính time theo từng transition
-    if (step === 1 && progress.start) {
-      // Start → Step1: check theo start_type của admin
-      const sys = await env.DB.prepare("SELECT start_type FROM system_settings WHERE id = 1").first();
-      const sysType = sys?.start_type || "linkvertise";
-      const startBypass = (sysType === "lootlab") ? 40 : (sysType === "workink") ? 30 : 10;
-      const elapsed = now - (progress.created_at || now);
-      if (elapsed < startBypass) {
-        await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
-        return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
-      }
-    } else if (step === 2 && progress.step1) {
-      // Step1 → Step2: check theo step1_type
+    // Bypass check: Step1→Step2
+    if (step === 2 && progress.step1) {
       const s1type = userSettings.step1_type || "linkvertise";
       const s1Bypass = (s1type === "lootlab") ? 40 : (s1type === "workink") ? 30 : 10;
       const elapsed = now - (progress.step1_at || progress.created_at || now);
