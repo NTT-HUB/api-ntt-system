@@ -407,7 +407,8 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, step, hash, domain, flow_id, captcha_token } = body;
+    let { hwid, step, hash, domain, flow_id, captcha_token } = body;
+    if (hwid) hwid = hwid.replace(/ /g, "+");
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
@@ -485,7 +486,8 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { hwid, domain, key_prefix, flow_id } = body;
+    let { hwid, domain, key_prefix, flow_id } = body;
+    if (hwid) hwid = hwid.replace(/ /g, "+");
     if (!hwid || !domain || !key_prefix)
       return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
