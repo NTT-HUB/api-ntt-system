@@ -662,6 +662,8 @@ async function handleRequest(request, env, ctx) {
 
     const now            = Math.floor(Date.now() / 1000);
     const finalEncodeKey = encode_key || "ntt-hub";
+    if (finalEncodeKey.length > 20)
+      return json({ success: false, error: "Encode key max 20 chars" }, 400, request);
 
     const domainTaken = await env.DB.prepare(
       "SELECT user_id FROM user_settings WHERE website_domain = ? AND user_id != ?"
