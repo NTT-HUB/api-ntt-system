@@ -332,7 +332,8 @@ async function handleRequest(request, env, ctx) {
   }
 
   if (type === "captcha_new") {
-    const hwid = url.searchParams.get("hwid");
+    const hwidRaw = url.searchParams.get("hwid");
+    const hwid = hwidRaw ? hwidRaw.replace(/ /g, "+") : null;
     if (!hwid) return json({ success: false, error: "missing_hwid" }, 400, request);
 
     const chars  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -377,7 +378,8 @@ async function handleRequest(request, env, ctx) {
     try { body = await request.json(); }
     catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
 
-    const { id, answer, hwid } = body;
+    let { id, answer, hwid } = body;
+    if (hwid) hwid = hwid.replace(/ /g, "+");
     if (!id || !answer || !hwid) return json({ success: false, error: "Missing params" }, 400, request);
 
     const now = Math.floor(Date.now() / 1000);
