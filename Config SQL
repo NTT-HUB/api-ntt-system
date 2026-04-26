@@ -81,6 +81,14 @@ CREATE TABLE IF NOT EXISTS user_flows (
 );
 CREATE INDEX IF NOT EXISTS idx_flows_user ON user_flows(user_id);
 
+CREATE TABLE IF NOT EXISTS captcha_sessions (
+  id TEXT PRIMARY KEY,
+  answer TEXT NOT NULL,
+  hwid TEXT NOT NULL,
+  used INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 ALTER TABLE progress ADD COLUMN flow_id TEXT DEFAULT 'default';
 CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id);
 CREATE INDEX IF NOT EXISTS idx_settings_domain ON user_settings(website_domain);
