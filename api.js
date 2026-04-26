@@ -307,14 +307,19 @@ async function handleRequest(request, env, ctx) {
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
     const userSettings = await env.DB.prepare(
-      "SELECT linkvertise_token FROM user_settings WHERE website_domain = ?"
+      "SELECT linkvertise_token, step1_type, step2_type FROM user_settings WHERE website_domain = ?"
     ).bind(domain).first();
 
     if (!userSettings)
       return json({ success: false, error: "domain_not_found" }, 404, request);
 
-    // Chỉ check hash nếu user có token
-    if (userSettings.linkvertise_token && userSettings.linkvertise_token.trim() !== "") {
+    const stepType = step === 1 ? (userSettings.step1_type || "linkvertise")
+                   : step === 2 ? (userSettings.step2_type || "linkvertise")
+                   : "linkvertise";
+
+    const bypassSeconds = (stepType === "lootlab" || stepType === "workink") ? 30 : 10;
+
+    if (stepType === "linkvertise" && userSettings.linkvertise_token?.trim()) {
       if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
       const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
       if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
@@ -331,10 +336,9 @@ async function handleRequest(request, env, ctx) {
       progress = { created_at: now, start: 0, step1: 0, step2: 0 };
     }
 
-    // Bypass detection: dưới 10s kể từ lúc start thì reset
     if (step !== "start" && progress.start) {
       const elapsed = now - progress.created_at;
-      if (elapsed < 10) {
+      if (elapsed < bypassSeconds) {
         await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
         return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
       }
@@ -371,9 +375,10 @@ async function handleRequest(request, env, ctx) {
     if (!progress)
       return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
 
-    // Bypass detection
     const now = Math.floor(Date.now() / 1000);
-    if (progress.start && (now - progress.created_at) < 10) {
+    const step1Type = settings.step1_type || "linkvertise";
+    const bypassSeconds = (step1Type === "lootlab" || step1Type === "workink") ? 30 : 10;
+    if (progress.start && (now - progress.created_at) < bypassSeconds) {
       await env.DB.prepare("DELETE FROM progress WHERE hwid = ?").bind(hwid).run();
       return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
     }
@@ -529,7 +534,7 @@ async function handleRequest(request, env, ctx) {
     const {
       user_id, website_domain, key_domain, encode_key,
       linkvertise_token, discord_webhook, ad_steps,
-      step1_link, step2_link,
+      step1_link, step2_link, step1_type, step2_type,
     } = body;
 
     if (!user_id || !website_domain)
@@ -560,16 +565,18 @@ async function handleRequest(request, env, ctx) {
     const existing = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
       .bind(user_id).first();
 
-    const finalToken   = linkvertise_token !== undefined ? linkvertise_token : (existing?.linkvertise_token || "");
-    const finalWebhook = discord_webhook   !== undefined ? discord_webhook   : (existing?.discord_webhook   || "");
-    const finalSteps   = ad_steps          !== undefined ? ad_steps          : (existing?.ad_steps          || 1);
-    const finalStep1   = step1_link        !== undefined ? step1_link        : (existing?.step1_link        || "");
-    const finalStep2   = step2_link        !== undefined ? step2_link        : (existing?.step2_link        || "");
+    const finalToken     = linkvertise_token !== undefined ? linkvertise_token : (existing?.linkvertise_token || "");
+    const finalWebhook   = discord_webhook   !== undefined ? discord_webhook   : (existing?.discord_webhook   || "");
+    const finalSteps     = ad_steps          !== undefined ? ad_steps          : (existing?.ad_steps          || 1);
+    const finalStep1     = step1_link        !== undefined ? step1_link        : (existing?.step1_link        || "");
+    const finalStep2     = step2_link        !== undefined ? step2_link        : (existing?.step2_link        || "");
+    const finalStep1Type = step1_type        !== undefined ? step1_type        : (existing?.step1_type        || "linkvertise");
+    const finalStep2Type = step2_type        !== undefined ? step2_type        : (existing?.step2_type        || "linkvertise");
 
     await env.DB.prepare(`
       INSERT INTO user_settings
-        (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (user_id, website_domain, key_domain, encode_key, linkvertise_token, discord_webhook, ad_steps, step1_link, step2_link, step1_type, step2_type, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id) DO UPDATE SET
         website_domain    = excluded.website_domain,
         key_domain        = excluded.key_domain,
@@ -579,11 +586,13 @@ async function handleRequest(request, env, ctx) {
         ad_steps          = excluded.ad_steps,
         step1_link        = excluded.step1_link,
         step2_link        = excluded.step2_link,
+        step1_type        = excluded.step1_type,
+        step2_type        = excluded.step2_type,
         updated_at        = excluded.updated_at
     `).bind(
       user_id, finalDomain, finalKeyDomain, finalEncodeKey,
       finalToken, finalWebhook, finalSteps,
-      finalStep1, finalStep2, now, now,
+      finalStep1, finalStep2, finalStep1Type, finalStep2Type, now, now,
     ).run();
 
     return json({ success: true, message: "Settings saved", website_domain: finalDomain }, request);
