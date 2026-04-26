@@ -13,12 +13,11 @@ CREATE TABLE IF NOT EXISTS users (
   created_at INTEGER NOT NULL,
   updated_at INTEGER
 );
-
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at);
+CREATE INDEX IF NOT EXISTS idx_users_email    ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_created  ON users(created_at);
 
--- User sessions (optional, for tracking active sessions)
+-- Sessions table
 CREATE TABLE IF NOT EXISTS sessions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL,
@@ -29,70 +28,97 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at INTEGER NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_token   ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 -- User settings table
 CREATE TABLE IF NOT EXISTS user_settings (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id         INTEGER NOT NULL UNIQUE,
-  website_domain  TEXT    NOT NULL,
-  key_domain      TEXT    DEFAULT 'KEY',
-  encode_key      TEXT    DEFAULT 'ntt-hub',
-  linkvertise_token TEXT  NOT NULL,
-  discord_webhook TEXT,
-  ad_steps        INTEGER DEFAULT 1,
-  start_link      TEXT,
-  step1_link      TEXT,
-  step2_link      TEXT,
-  total_keys      INTEGER DEFAULT 0,
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER,
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id           INTEGER NOT NULL UNIQUE,
+  website_domain    TEXT    NOT NULL,
+  key_domain        TEXT    DEFAULT 'KEY',
+  encode_key        TEXT    DEFAULT 'ntt-hub',
+  linkvertise_token TEXT    NOT NULL DEFAULT '',
+  discord_webhook   TEXT,
+  ad_steps          INTEGER DEFAULT 1,
+  start_link        TEXT,
+  step1_link        TEXT    DEFAULT '',
+  step2_link        TEXT    DEFAULT '',
+  step1_type        TEXT    DEFAULT 'linkvertise',
+  step2_type        TEXT    DEFAULT 'linkvertise',
+  step1_yt_links    TEXT    DEFAULT '[]',
+  step2_yt_links    TEXT    DEFAULT '[]',
+  total_keys        INTEGER DEFAULT 0,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS idx_settings_user   ON user_settings(user_id);
+CREATE INDEX IF NOT EXISTS idx_settings_domain ON user_settings(website_domain);
 
-CREATE TABLE IF NOT EXISTS system_settings (
-  id INTEGER PRIMARY KEY,
-  start_type TEXT DEFAULT 'linkvertise',
-  start_link TEXT DEFAULT '',
-  start_yt_links TEXT DEFAULT '[]',
-  linkvertise_token TEXT DEFAULT '',
-  updated_at INTEGER
-);
-INSERT OR IGNORE INTO system_settings (id, start_type, start_link, start_yt_links, linkvertise_token, updated_at) VALUES (1, 'linkvertise', '', '[]', '', 0);
-
-CREATE TABLE IF NOT EXISTS user_flows (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  flow_id INTEGER NOT NULL,
-  name TEXT DEFAULT 'Flow',
-  ad_steps INTEGER DEFAULT 1,
-  step1_type TEXT DEFAULT 'linkvertise',
-  step1_link TEXT DEFAULT '',
-  step1_yt_links TEXT DEFAULT '[]',
-  step2_type TEXT DEFAULT 'linkvertise',
-  step2_link TEXT DEFAULT '',
-  step2_yt_links TEXT DEFAULT '[]',
+-- Progress table
+CREATE TABLE IF NOT EXISTS progress (
+  hwid       TEXT    NOT NULL,
+  ostime     INTEGER,
+  start      INTEGER DEFAULT 0,
+  step1      INTEGER DEFAULT 0,
+  step2      INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER,
+  flow_id    TEXT    DEFAULT 'default',
+  PRIMARY KEY (hwid, flow_id)
+);
+
+-- IP tracking table
+CREATE TABLE IF NOT EXISTS ip_tracking (
+  ip         TEXT    PRIMARY KEY,
+  hwids      TEXT    NOT NULL DEFAULT '[]',
+  first_seen INTEGER NOT NULL
+);
+
+-- IP blacklist table
+CREATE TABLE IF NOT EXISTS ip_blacklist (
+  ip        TEXT    PRIMARY KEY,
+  banned_at INTEGER NOT NULL,
+  reason    TEXT
+);
+
+-- System settings table
+CREATE TABLE IF NOT EXISTS system_settings (
+  id                INTEGER PRIMARY KEY,
+  start_type        TEXT    DEFAULT 'linkvertise',
+  start_link        TEXT    DEFAULT '',
+  start_yt_links    TEXT    DEFAULT '[]',
+  linkvertise_token TEXT    DEFAULT '',
+  updated_at        INTEGER
+);
+INSERT OR IGNORE INTO system_settings (id, start_type, start_link, start_yt_links, linkvertise_token, updated_at)
+VALUES (1, 'linkvertise', '', '[]', '', 0);
+
+-- User flows table
+CREATE TABLE IF NOT EXISTS user_flows (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id        INTEGER NOT NULL,
+  flow_id        INTEGER NOT NULL,
+  name           TEXT    DEFAULT 'Flow',
+  ad_steps       INTEGER DEFAULT 1,
+  step1_type     TEXT    DEFAULT 'linkvertise',
+  step1_link     TEXT    DEFAULT '',
+  step1_yt_links TEXT    DEFAULT '[]',
+  step2_type     TEXT    DEFAULT 'linkvertise',
+  step2_link     TEXT    DEFAULT '',
+  step2_yt_links TEXT    DEFAULT '[]',
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER,
   UNIQUE(user_id, flow_id)
 );
 CREATE INDEX IF NOT EXISTS idx_flows_user ON user_flows(user_id);
 
+-- Captcha sessions table
 CREATE TABLE IF NOT EXISTS captcha_sessions (
-  id TEXT PRIMARY KEY,
-  answer TEXT NOT NULL,
-  hwid TEXT NOT NULL,
-  used INTEGER DEFAULT 0,
+  id         TEXT    PRIMARY KEY,
+  answer     TEXT    NOT NULL,
+  hwid       TEXT    NOT NULL,
+  used       INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL
 );
-
-ALTER TABLE progress ADD COLUMN flow_id TEXT DEFAULT 'default';
-CREATE INDEX IF NOT EXISTS idx_settings_user ON user_settings(user_id);
-CREATE INDEX IF NOT EXISTS idx_settings_domain ON user_settings(website_domain);
-ALTER TABLE user_settings ADD COLUMN step1_type TEXT DEFAULT 'linkvertise';
-ALTER TABLE user_settings ADD COLUMN step2_type TEXT DEFAULT 'linkvertise';
-ALTER TABLE user_settings ADD COLUMN step1_yt_links TEXT DEFAULT '[]';
-ALTER TABLE user_settings ADD COLUMN step2_yt_links TEXT DEFAULT '[]';
