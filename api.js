@@ -426,17 +426,27 @@ async function handleRequest(request, env, ctx) {
     }
 
     const userSettings = await env.DB.prepare(
-      "SELECT linkvertise_token, step1_type, step2_type FROM user_settings WHERE website_domain = ?"
+      "SELECT * FROM user_settings WHERE website_domain = ?"
     ).bind(domain).first();
 
     if (!userSettings)
       return json({ success: false, error: "domain_not_found" }, 404, request);
 
-    const stepType = step === 1 ? (userSettings.step1_type || "linkvertise")
-                   : step === 2 ? (userSettings.step2_type || "linkvertise")
-                   : (() => {
-                       return "system_start";
-                     })();
+    // Merge flow settings nếu có flow_id
+    let effectiveStep1Type = userSettings.step1_type || "linkvertise";
+    let effectiveStep2Type = userSettings.step2_type || "linkvertise";
+    if (flowKey !== "default") {
+      const flowRow = await env.DB.prepare("SELECT * FROM user_flows WHERE user_id = ? AND flow_id = ?")
+        .bind(userSettings.user_id, flowKey).first();
+      if (flowRow) {
+        effectiveStep1Type = flowRow.step1_type || "linkvertise";
+        effectiveStep2Type = flowRow.step2_type || "linkvertise";
+      }
+    }
+
+    const stepType = step === 1 ? effectiveStep1Type
+                   : step === 2 ? effectiveStep2Type
+                   : "system_start";
 
     let bypassSeconds = (stepType === "lootlab") ? 40 : (stepType === "workink") ? 30 : (stepType === "youtube") ? 15 : 10;
 
@@ -468,9 +478,8 @@ async function handleRequest(request, env, ctx) {
 
     // Bypass check: Step1→Step2
     if (step === 2 && progress.step1) {
-      const s1type = userSettings.step1_type || "linkvertise";
-      const s1Bypass = (s1type === "lootlab") ? 40 : (s1type === "workink") ? 30 : (s1type === "youtube") ? 15 : 10;
-      const elapsed = now - (progress.step1_at || progress.created_at || now);
+      const s1Bypass = (effectiveStep1Type === "lootlab") ? 40 : (effectiveStep1Type === "workink") ? 30 : (effectiveStep1Type === "youtube") ? 15 : 10;
+      const elapsed = now - (progress.step1_at || now);
       if (elapsed < s1Bypass) {
         await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
         return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
