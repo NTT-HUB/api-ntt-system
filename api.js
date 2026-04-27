@@ -496,7 +496,7 @@ async function handleRequest(request, env, ctx) {
     } else if (step === 1) {
       await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1, step1_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
     } else if (step === 2) {
-      await env.DB.prepare("UPDATE progress SET step2 = 1, step2_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
+      await env.DB.prepare("UPDATE progress SET start = 1, step1 = 1, step2 = 1, step2_at = ? WHERE hwid = ? AND flow_id = ?").bind(now, hwid, flowKey).run();
     }
 
     return json({ success: true, message: `Step ${step} completed` }, request);
