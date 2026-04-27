@@ -541,7 +541,7 @@ async function handleRequest(request, env, ctx) {
     if (effectiveSettings.ad_steps === 2) {
       if (progress.step2) {
         const step2Type = effectiveSettings.step2_type || "linkvertise";
-        const hasToken = step2Type === "linkvertise" && userSettings?.linkvertise_token?.trim();
+        const hasToken = step2Type === "linkvertise" && settings?.linkvertise_token?.trim();
         if (!hasToken) {
           const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
           const baseTime = progress.created_at || 0;
@@ -553,7 +553,7 @@ async function handleRequest(request, env, ctx) {
       }
     } else {
       const step1Type = effectiveSettings.step1_type || "linkvertise";
-      const hasToken = step1Type === "linkvertise" && userSettings?.linkvertise_token?.trim();
+      const hasToken = step1Type === "linkvertise" && settings?.linkvertise_token?.trim();
       if (!hasToken) {
         const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
         const baseTime = progress.created_at || 0;
