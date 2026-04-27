@@ -544,7 +544,7 @@ async function handleRequest(request, env, ctx) {
         const hasToken = step2Type === "linkvertise" && settings?.linkvertise_token?.trim();
         if (!hasToken) {
           const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
-          const baseTime = progress.created_at || 0;
+          const baseTime = progress.step2_at || progress.step1_at || progress.created_at || 0;
           if ((now - baseTime) < step2Bypass) {
             await env.DB.prepare("UPDATE progress SET step2 = 0, step2_at = NULL WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
             return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
@@ -556,7 +556,7 @@ async function handleRequest(request, env, ctx) {
       const hasToken = step1Type === "linkvertise" && settings?.linkvertise_token?.trim();
       if (!hasToken) {
         const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
-        const baseTime = progress.created_at || 0;
+        const baseTime = progress.step1_at || progress.created_at || 0;
         if (progress.step1 && (now - baseTime) < step1Bypass) {
           await env.DB.prepare("UPDATE progress SET step1 = 0, step1_at = NULL WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
           return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
