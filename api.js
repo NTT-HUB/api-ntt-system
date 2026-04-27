@@ -510,12 +510,23 @@ async function handleRequest(request, env, ctx) {
     if (!progress)
       return json({ success: false, error: "No progress found. Please complete the steps." }, 403, request);
 
+    // Merge flow settings nếu có flow_id
+    let effectiveSettings = { ...settings };
+    if (flowKey !== "default") {
+      const flowRow = await env.DB.prepare("SELECT * FROM user_flows WHERE user_id = ? AND flow_id = ?")
+        .bind(settings.user_id, flowKey).first();
+      if (flowRow) {
+        effectiveSettings.ad_steps    = flowRow.ad_steps;
+        effectiveSettings.step1_type  = flowRow.step1_type;
+        effectiveSettings.step2_type  = flowRow.step2_type;
+      }
+    }
+
     const now = Math.floor(Date.now() / 1000);
 
-    if (settings.ad_steps === 2) {
-      // 2 steps: Step1→Step2 và Step2→Generate check riêng
+    if (effectiveSettings.ad_steps === 2) {
       if (progress.step2) {
-        const step2Type = settings.step2_type || "linkvertise";
+        const step2Type = effectiveSettings.step2_type || "linkvertise";
         const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
         const step2Time = progress.step2_at || progress.step1_at || progress.created_at || 0;
         if ((now - step2Time) < step2Bypass) {
@@ -524,8 +535,7 @@ async function handleRequest(request, env, ctx) {
         }
       }
     } else {
-      // 1 step: tính từ created_at (lúc start) đến generate
-      const step1Type = settings.step1_type || "linkvertise";
+      const step1Type = effectiveSettings.step1_type || "linkvertise";
       const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
       const step1Time = progress.created_at || 0;
       if (progress.step1 && (now - step1Time) < step1Bypass) {
@@ -537,7 +547,7 @@ async function handleRequest(request, env, ctx) {
     if (!progress.step1)
       return json({ success: false, error: "Step 1 not completed" }, 403, request);
 
-    if (settings.ad_steps === 2 && !progress.step2)
+    if (effectiveSettings.ad_steps === 2 && !progress.step2)
       return json({ success: false, error: "Step 2 not completed" }, 403, request);
 
     const keyId = Math.random().toString().slice(2, 9);
