@@ -459,10 +459,12 @@ async function handleRequest(request, env, ctx) {
         const valid = await checkLinkvertiseHash(hash, sys.linkvertise_token, ua);
         if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
       }
-    } else if (stepType === "linkvertise" && userSettings.linkvertise_token?.trim()) {
-      if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
-      const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
-      if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
+    } else if (stepType === "linkvertise") {
+      if (userSettings.linkvertise_token?.trim()) {
+        if (!hash || hash.length < 10) return json({ success: false, error: "missing_hash" }, 403, request);
+        const valid = await checkLinkvertiseHash(hash, userSettings.linkvertise_token, ua);
+        if (!valid) return json({ success: false, error: "invalid_hash" }, 403, request);
+      }
     }
 
     const now = Math.floor(Date.now() / 1000);
@@ -478,7 +480,8 @@ async function handleRequest(request, env, ctx) {
 
     // Bypass check: Step1→Step2
     if (step === 2 && progress.step1) {
-      if (effectiveStep1Type !== "linkvertise") {
+      const hasToken = effectiveStep1Type === "linkvertise" && userSettings.linkvertise_token?.trim();
+      if (!hasToken) {
         const s1Bypass = (effectiveStep1Type === "lootlab") ? 40 : (effectiveStep1Type === "workink") ? 30 : (effectiveStep1Type === "youtube") ? 15 : 10;
         const elapsed = now - (progress.step1_at || now);
         if (elapsed < s1Bypass) {
@@ -538,9 +541,10 @@ async function handleRequest(request, env, ctx) {
     if (effectiveSettings.ad_steps === 2) {
       if (progress.step2) {
         const step2Type = effectiveSettings.step2_type || "linkvertise";
-        if (step2Type !== "linkvertise") {
+        const hasToken = step2Type === "linkvertise" && userSettings?.linkvertise_token?.trim();
+        if (!hasToken) {
           const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
-          const step2Time = progress.step2_at || progress.step1_at || progress.created_at || 0;
+          const step2Time = progress.step1_at || progress.created_at || 0;
           if ((now - step2Time) < step2Bypass) {
             await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
             return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
@@ -549,7 +553,8 @@ async function handleRequest(request, env, ctx) {
       }
     } else {
       const step1Type = effectiveSettings.step1_type || "linkvertise";
-      if (step1Type !== "linkvertise") {
+      const hasToken = step1Type === "linkvertise" && userSettings?.linkvertise_token?.trim();
+      if (!hasToken) {
         const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
         const step1Time = progress.created_at || 0;
         if (progress.step1 && (now - step1Time) < step1Bypass) {
