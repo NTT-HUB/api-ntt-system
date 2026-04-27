@@ -416,7 +416,7 @@ async function handleRequest(request, env, ctx) {
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
-    const flowKey = flow_id || "default";
+    const flowKey = flow_id ? String(flow_id) : "default";
 
     if (step === "start") {
       if (!captcha_token) return json({ success: false, error: "captcha_required" }, 403, request);
@@ -513,7 +513,7 @@ async function handleRequest(request, env, ctx) {
       return json({ success: false, error: "Missing params" }, 400, request);
     if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
-    const flowKey = flow_id || "default";
+    const flowKey = flow_id ? String(flow_id) : "default";
     const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
     const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE website_domain = ?")
       .bind(domain).first();
@@ -544,8 +544,8 @@ async function handleRequest(request, env, ctx) {
         const hasToken = step2Type === "linkvertise" && userSettings?.linkvertise_token?.trim();
         if (!hasToken) {
           const step2Bypass = (step2Type === "lootlab") ? 40 : (step2Type === "workink") ? 30 : (step2Type === "youtube") ? 15 : 10;
-          const step2Time = progress.step1_at || progress.created_at || 0;
-          if ((now - step2Time) < step2Bypass) {
+          const baseTime = progress.created_at || 0;
+          if ((now - baseTime) < step2Bypass) {
             await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
             return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
           }
@@ -556,8 +556,8 @@ async function handleRequest(request, env, ctx) {
       const hasToken = step1Type === "linkvertise" && userSettings?.linkvertise_token?.trim();
       if (!hasToken) {
         const step1Bypass = (step1Type === "lootlab") ? 40 : (step1Type === "workink") ? 30 : (step1Type === "youtube") ? 15 : 10;
-        const step1Time = progress.created_at || 0;
-        if (progress.step1 && (now - step1Time) < step1Bypass) {
+        const baseTime = progress.created_at || 0;
+        if (progress.step1 && (now - baseTime) < step1Bypass) {
           await env.DB.prepare("DELETE FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
           return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
         }
