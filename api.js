@@ -937,11 +937,19 @@ async function handleRequest(request, env, ctx) {
     return json({
       success: true,
       settings: {
-        ...settings,
+        website_domain:    settings.website_domain,
+        key_domain:        settings.key_domain,
+        ad_steps:          settings.ad_steps,
+        step1_type:        settings.step1_type,
+        step1_link:        settings.step1_link,
+        step1_yt_links:    settings.step1_yt_links,
+        step2_type:        settings.step2_type,
+        step2_link:        settings.step2_link,
+        step2_yt_links:    settings.step2_yt_links,
         ...flowSettings,
-        start_link:     sys?.start_link     || env.SYSTEM_START_LINK || SYSTEM_START_LINK,
-        start_type:     sys?.start_type     || "linkvertise",
-        start_yt_links: sys?.start_yt_links || "[]",
+        start_link:        sys?.start_link     || env.SYSTEM_START_LINK || SYSTEM_START_LINK,
+        start_type:        sys?.start_type     || "linkvertise",
+        start_yt_links:    sys?.start_yt_links || "[]",
       },
     }, request);
   }
