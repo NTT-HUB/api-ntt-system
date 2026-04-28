@@ -752,7 +752,7 @@ async function handleRequest(request, env, ctx) {
     const authPayload = await verifyToken(authHeader.slice(7));
     if (!authPayload)
       return json({ success: false, error: 'Invalid or expired token' }, 401, request);
-    if (String(authPayload.user_id) !== String(user_id))
+    if (String(authPayload.userId) !== String(user_id))
       return json({ success: false, error: 'Forbidden' }, 403, request);
 
 
@@ -856,7 +856,7 @@ async function handleRequest(request, env, ctx) {
     const authPayload = await verifyToken(authHeader.slice(7));
     if (!authPayload)
       return json({ success: false, error: 'Invalid or expired token' }, 401, request);
-    if (String(authPayload.user_id) !== String(user_id))
+    if (String(authPayload.userId) !== String(user_id))
       return json({ success: false, error: 'Forbidden' }, 403, request);
 
     const now = Math.floor(Date.now() / 1000);
@@ -897,7 +897,7 @@ async function handleRequest(request, env, ctx) {
     const authPayload = await verifyToken(authHeader.slice(7));
     if (!authPayload)
       return json({ success: false, error: 'Invalid or expired token' }, 401, request);
-    if (String(authPayload.user_id) !== String(user_id))
+    if (String(authPayload.userId) !== String(user_id))
       return json({ success: false, error: 'Forbidden' }, 403, request);
 
     await env.DB.prepare("DELETE FROM user_flows WHERE user_id = ? AND flow_id = ?").bind(user_id, flow_id).run();
