@@ -370,10 +370,7 @@ async function handleRequest(request, env, ctx) {
     }).join('');
 
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><rect width="200" height="60" fill="#0d1120"/>${noises}${letters}</svg>`;
-
-    // Fix: btoa() chỉ handle ASCII, dùng TextEncoder để tránh truncate khi có ký tự unicode
-    const svgBytes = new TextEncoder().encode(svg);
-    const b64 = btoa(String.fromCharCode(...svgBytes));
+    const b64 = btoa(svg);
 
     return json({ success: true, id, image: `data:image/svg+xml;base64,${b64}` }, request);
   }
