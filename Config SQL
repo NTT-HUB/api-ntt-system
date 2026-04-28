@@ -124,3 +124,6 @@ CREATE TABLE IF NOT EXISTS captcha_sessions (
   used       INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL
 );
+
+ALTER TABLE progress ADD COLUMN step1_start_at INTEGER;
+ALTER TABLE progress ADD COLUMN step2_start_at INTEGER;
