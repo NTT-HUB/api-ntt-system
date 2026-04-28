@@ -472,10 +472,16 @@ async function handleRequest(request, env, ctx) {
     let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
 
     if (!progress) {
+      // Lấy created_at từ default flow (do script init tạo) để tránh bypass false positive
+      const defaultProgress = await env.DB.prepare(
+        "SELECT created_at FROM progress WHERE hwid = ? AND flow_id = 'default'"
+      ).bind(hwid).first();
+      const initTime = defaultProgress?.created_at || now;
+
       await env.DB.prepare(
         "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at, flow_id) VALUES (?, ?, 0, 0, 0, ?, ?)"
-      ).bind(hwid, now, now, flowKey).run();
-      progress = { created_at: now, start: 0, step1: 0, step2: 0 };
+      ).bind(hwid, now, initTime, flowKey).run();
+      progress = { created_at: initTime, start: 0, step1: 0, step2: 0 };
     }
 
     // Bypass check: Step1→Step2
