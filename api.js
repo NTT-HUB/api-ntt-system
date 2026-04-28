@@ -247,7 +247,7 @@ async function handleRequest(request, env, ctx) {
     const row = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowId).first();
     if (!row) return json({ status: false, start: false, step1: false, step2: false }, 200, request);
 
-    return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2 }, request);
+    return json({ status: true, hwid: row.hwid, start: !!row.start, step1: !!row.step1, step2: !!row.step2, step1_start_at: row.step1_start_at || null, step2_start_at: row.step2_start_at || null }, request);
   }
 
   if (type === "data") {
@@ -406,6 +406,36 @@ async function handleRequest(request, env, ctx) {
     return json({ success: true, token }, request);
   }
 
+  if (type === "mark_step_start") {
+    let body;
+    try { body = await request.json(); }
+    catch { return json({ success: false, error: "Invalid JSON" }, 400, request); }
+
+    let { hwid, step, flow_id } = body;
+    if (hwid) hwid = hwid.replace(/ /g, "+");
+    if (!hwid || !step) return json({ success: false, error: "Missing params" }, 400, request);
+
+    const flowKey = flow_id ? String(flow_id) : "default";
+    const now = Math.floor(Date.now() / 1000);
+
+    const col = step === 1 ? "step1_start_at" : step === 2 ? "step2_start_at" : null;
+    if (!col) return json({ success: false, error: "Invalid step" }, 400, request);
+
+    // Upsert row nếu chưa có
+    const existing = await env.DB.prepare("SELECT hwid FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
+    if (!existing) {
+      const defaultP = await env.DB.prepare("SELECT created_at FROM progress WHERE hwid = ? AND flow_id = 'default'").bind(hwid).first();
+      const initTime = defaultP?.created_at || now;
+      await env.DB.prepare(
+        "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at, flow_id) VALUES (?, ?, 0, 0, 0, ?, ?)"
+      ).bind(hwid, now, initTime, flowKey).run();
+    }
+
+    await env.DB.prepare(`UPDATE progress SET ${col} = ? WHERE hwid = ? AND flow_id = ?`).bind(now, hwid, flowKey).run();
+
+    return json({ success: true }, request);
+  }
+
   if (type === "complete_step") {
     let body;
     try { body = await request.json(); }
@@ -472,26 +502,30 @@ async function handleRequest(request, env, ctx) {
     let progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
 
     if (!progress) {
-      // Lấy created_at từ default flow (do script init tạo) để tránh bypass false positive
-      const defaultProgress = await env.DB.prepare(
-        "SELECT created_at FROM progress WHERE hwid = ? AND flow_id = 'default'"
-      ).bind(hwid).first();
-      const initTime = defaultProgress?.created_at || now;
-
+      const defaultP = await env.DB.prepare("SELECT created_at FROM progress WHERE hwid = ? AND flow_id = 'default'").bind(hwid).first();
+      const initTime = defaultP?.created_at || now;
       await env.DB.prepare(
         "INSERT INTO progress (hwid, ostime, start, step1, step2, created_at, flow_id) VALUES (?, ?, 0, 0, 0, ?, ?)"
       ).bind(hwid, now, initTime, flowKey).run();
       progress = { created_at: initTime, start: 0, step1: 0, step2: 0 };
     }
 
-    // Bypass check: Step1→Step2
-    if (step === 2 && progress.step1) {
-      const hasToken = effectiveStep1Type === "linkvertise" && userSettings.linkvertise_token?.trim();
+    // Bypass check dùng step_start_at (lúc user bấm nút)
+    if (step === 1 || step === 2) {
+      const stepType = step === 1 ? effectiveStep1Type : effectiveStep2Type;
+      const hasToken = stepType === "linkvertise" && userSettings.linkvertise_token?.trim();
       if (!hasToken) {
-        const s1Bypass = (effectiveStep1Type === "lootlab") ? 40 : (effectiveStep1Type === "workink") ? 30 : (effectiveStep1Type === "youtube") ? 15 : 10;
-        const elapsed = now - (progress.step1_at || now);
-        if (elapsed < s1Bypass) {
-          await env.DB.prepare("UPDATE progress SET step1 = 0, step1_at = NULL WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).run();
+        const bypassSecs = stepType === "lootlab" ? 40 : stepType === "workink" ? 30 : stepType === "youtube" ? 15 : 10;
+        const startAt = step === 1 ? progress.step1_start_at : progress.step2_start_at;
+        if (!startAt) {
+          return json({ success: false, error: "bypass_detected", message: "Please click the step button first" }, 403, request);
+        }
+        const elapsed = now - startAt;
+        if (elapsed < bypassSecs) {
+          const resetSql = step === 1
+            ? "UPDATE progress SET step1 = 0, step1_start_at = NULL WHERE hwid = ? AND flow_id = ?"
+            : "UPDATE progress SET step2 = 0, step2_start_at = NULL WHERE hwid = ? AND flow_id = ?";
+          await env.DB.prepare(resetSql).bind(hwid, flowKey).run();
           return json({ success: false, error: "bypass_detected", message: "Too fast, please try again" }, 403, request);
         }
       }
@@ -544,8 +578,7 @@ async function handleRequest(request, env, ctx) {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Bypass check đã được thực hiện trong complete_step (trước khi mark done).
-    // Không check lại ở đây vì step1_at/step2_at luôn ≈ now khi create_key được gọi ngay sau.
+    // Bypass đã được check trong complete_step.
 
     if (!progress.step1)
       return json({ success: false, error: "Step 1 not completed" }, 403, request);
