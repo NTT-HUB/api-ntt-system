@@ -746,6 +746,17 @@ async function handleRequest(request, env, ctx) {
     if (!user_id || !website_domain)
       return json({ success: false, error: "Missing required fields" }, 400, request);
 
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer '))
+      return json({ success: false, error: 'Unauthorized' }, 401, request);
+    const authPayload = await verifyToken(authHeader.slice(7));
+    if (!authPayload)
+      return json({ success: false, error: 'Invalid or expired token' }, 401, request);
+    if (String(authPayload.user_id) !== String(user_id))
+      return json({ success: false, error: 'Forbidden' }, 403, request);
+
+
+
     const finalDomain = website_domain
       .trim().toLowerCase()
       .replace(/\s+/g, "-")
@@ -839,6 +850,15 @@ async function handleRequest(request, env, ctx) {
     const { user_id, flow_id, name, ad_steps, step1_type, step1_link, step1_yt_links, step2_type, step2_link, step2_yt_links } = body;
     if (!user_id || !flow_id) return json({ success: false, error: "Missing params" }, 400, request);
 
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer '))
+      return json({ success: false, error: 'Unauthorized' }, 401, request);
+    const authPayload = await verifyToken(authHeader.slice(7));
+    if (!authPayload)
+      return json({ success: false, error: 'Invalid or expired token' }, 401, request);
+    if (String(authPayload.user_id) !== String(user_id))
+      return json({ success: false, error: 'Forbidden' }, 403, request);
+
     const now = Math.floor(Date.now() / 1000);
     await env.DB.prepare(`
       INSERT INTO user_flows (user_id, flow_id, name, ad_steps, step1_type, step1_link, step1_yt_links, step2_type, step2_link, step2_yt_links, created_at, updated_at)
@@ -870,6 +890,15 @@ async function handleRequest(request, env, ctx) {
 
     const { user_id, flow_id } = body;
     if (!user_id || !flow_id) return json({ success: false, error: "Missing params" }, 400, request);
+
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer '))
+      return json({ success: false, error: 'Unauthorized' }, 401, request);
+    const authPayload = await verifyToken(authHeader.slice(7));
+    if (!authPayload)
+      return json({ success: false, error: 'Invalid or expired token' }, 401, request);
+    if (String(authPayload.user_id) !== String(user_id))
+      return json({ success: false, error: 'Forbidden' }, 403, request);
 
     await env.DB.prepare("DELETE FROM user_flows WHERE user_id = ? AND flow_id = ?").bind(user_id, flow_id).run();
     return json({ success: true, message: "Flow deleted" }, request);
