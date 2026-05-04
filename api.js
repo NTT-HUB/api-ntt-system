@@ -826,6 +826,15 @@ async function handleRequest(request, env, ctx) {
     const userId = url.searchParams.get("user_id");
     if (!userId) return json({ success: false, error: "Missing user_id" }, 400, request);
 
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer "))
+      return json({ success: false, error: "Unauthorized" }, 401, request);
+    const authPayload = await verifyToken(authHeader.slice(7));
+    if (!authPayload)
+      return json({ success: false, error: "Invalid or expired token" }, 401, request);
+    if (String(authPayload.userId) !== String(userId))
+      return json({ success: false, error: "Forbidden" }, 403, request);
+
     const settings = await env.DB.prepare("SELECT * FROM user_settings WHERE user_id = ?")
       .bind(userId).first();
 
