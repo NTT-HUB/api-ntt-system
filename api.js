@@ -49,10 +49,10 @@ function normalizeHwid(url) {
   if (!raw) return null;
   try {
     const decoded = decodeURIComponent(raw).replace(/ /g, "+");
-    return decoded.length > 50 ? null : decoded;
+    return decoded.length > 100 ? null : decoded;
   } catch {
     const h = raw.replace(/ /g, "+");
-    return h.length > 50 ? null : h;
+    return h.length > 100 ? null : h;
   }
 }
 
@@ -191,7 +191,7 @@ async function handleRequest(request, env, ctx) {
     } catch { return json({ status: false, error: "invalid_body" }, 400, request); }
 
     if (!hwid || !ostime) return json({ status: false, error: "missing_params" }, 400, request);
-    if (hwid.length > 50) return json({ status: false, error: "invalid_hwid" }, 400, request);
+    if (hwid.length > 100) return json({ status: false, error: "invalid_hwid" }, 400, request);
 
     const now    = Math.floor(Date.now() / 1000);
     const cutoff = now - SESSION_TTL;
@@ -444,7 +444,7 @@ async function handleRequest(request, env, ctx) {
     let { hwid, step, hash, domain, flow_id, captcha_token } = body;
     if (hwid) hwid = hwid.replace(/ /g, "+");
     if (!hwid || !step || !domain) return json({ success: false, error: "Missing params" }, 400, request);
-    if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
+    if (hwid.length > 100) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
     const flowKey = flow_id ? String(flow_id) : "default";
 
@@ -551,7 +551,7 @@ async function handleRequest(request, env, ctx) {
     if (hwid) hwid = hwid.replace(/ /g, "+");
     if (!hwid || !domain || !key_prefix)
       return json({ success: false, error: "Missing params" }, 400, request);
-    if (hwid.length > 50) return json({ success: false, error: "Invalid hwid" }, 400, request);
+    if (hwid.length > 100) return json({ success: false, error: "Invalid hwid" }, 400, request);
 
     const flowKey = flow_id ? String(flow_id) : "default";
     const progress = await env.DB.prepare("SELECT * FROM progress WHERE hwid = ? AND flow_id = ?").bind(hwid, flowKey).first();
