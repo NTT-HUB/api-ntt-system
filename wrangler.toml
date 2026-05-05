@@ -1,4 +1,4 @@
-name = "api-ntt-system"
+name = "api-ntt-system-s1"
 main = "api.js"
 compatibility_date = "2025-04-19"
 
